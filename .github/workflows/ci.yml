@@ -246,7 +246,9 @@ jobs:
         # Push the immutable SHA tag on every main-branch build. Move :latest
         # only on tagged releases so :latest never points at an arbitrary commit.
         run: |
-          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/expense-management-server
+          # OCI repository names must be lowercase; the owner (github.repository_owner)
+          # may contain uppercase, so lowercase it with bash parameter expansion.
+          IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/expense-management-server
           IMAGE_TAG=${{ github.sha }}
 
           docker build -f docker/Dockerfile -t $IMAGE_NAME:$IMAGE_TAG .
