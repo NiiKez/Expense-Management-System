@@ -1,0 +1,56 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Only collect logs from this Compose project. Without this keep rule,
+      # Docker service discovery can tail unrelated containers on the host.
+      # Anchored (^...$) so the project name must match exactly — an unanchored
+      # value would also keep substring-matching projects (e.g. "fullstack" also
+      # matching "fullstack-staging"). COMPOSE_PROJECT_NAME is injected by
+      # compose with a `:-fullstack` default, so it is never empty.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        regex: '^${COMPOSE_PROJECT_NAME}$'
+        action: keep
+      # Strip the leading "/" from container names and expose as `container`.
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+    pipeline_stages:
+      # Unwrap Docker's json-file log envelope (gives us the raw stdout line).
+      - docker: {}
+      # The `app` container emits JSON in production — promote level/timestamp
+      # to labels and use the embedded timestamp so log ordering survives even
+      # under load. Other containers (mysql, prometheus, grafana, loki itself)
+      # log plain text and skip this match block entirely.
+      - match:
+          selector: '{service="app"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  log_timestamp: timestamp
+            - labels:
+                level:
+            - timestamp:
+                source: log_timestamp
+                format: RFC3339Nano
+                action_on_failure: skip

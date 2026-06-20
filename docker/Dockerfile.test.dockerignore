@@ -1,0 +1,55 @@
+# Dockerfile-specific ignore for docker/Dockerfile.test (the integration test runner).
+# BuildKit prefers <dockerfile-path>.dockerignore over the context-root .dockerignore.
+# It does NOT merge with the root file, so the shared excludes are repeated here.
+#
+# The crucial difference from the root .dockerignore: this image RUNS the integration
+# tests, so it must NOT exclude __tests__/ or *.test.ts (the root file does, because the
+# production image only ships dist/). Excluding them is exactly why the test runner used
+# to report "No tests found".
+.git
+.github
+.claude
+
+# Recursive so nested workspaces are covered too (bare names missed e2e/node_modules).
+**/node_modules
+**/dist
+**/coverage
+
+# Only server/ is copied into the test image; keep big unrelated trees out of the context.
+e2e/
+docs/
+.playwright-mcp/
+*.png
+
+.env
+.env.*
+server/.env
+server/.env.*
+client/.env
+client/.env.*
+!server/.env.example
+!client/.env.example
+.npmrc
+
+server/uploads
+*.log
+npm-debug.log*
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Local database dumps / backups
+*.sql.gz
+*.dump
+*.bak
+*.backup
+database/backups

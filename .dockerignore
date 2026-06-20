@@ -1,0 +1,59 @@
+.git
+.github
+.claude
+
+# Recursive so nested workspaces are covered too. The bare `node_modules` below
+# used to miss e2e/node_modules (~40MB shipped to the daemon on every build),
+# which is why client/ and server/ variants had to be listed explicitly.
+**/node_modules
+**/dist
+**/coverage
+
+# Build context is the repo root, but docker/Dockerfile only copies server/.
+# Exclude large unrelated trees so they don't bloat the context or bust the
+# build cache when they change.
+e2e/
+docs/
+.playwright-mcp/
+*.png
+
+.env
+.env.*
+server/.env
+server/.env.*
+client/.env
+client/.env.*
+!server/.env.example
+!client/.env.example
+.npmrc
+
+server/uploads
+*.log
+npm-debug.log*
+
+# Tests are not needed in the production image (only dist/ is copied), but
+# excluding them speeds up the build context transfer.
+**/__tests__/**
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Local database dumps / backups
+*.sql.gz
+*.dump
+*.bak
+*.backup
+database/backups

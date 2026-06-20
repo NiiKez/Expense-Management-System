@@ -1,0 +1,29 @@
+{
+  "name": "expense-management",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Expense management monorepo (server + client + e2e). Each workspace has its own scripts.",
+  "scripts": {
+    "e2e:db:up": "docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml up -d --wait",
+    "e2e:db:down": "docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml down -v",
+    "e2e:db:reset": "npm run e2e:db:down && npm run e2e:db:up",
+    "e2e": "npm run e2e:db:up && npm --prefix e2e test",
+    "e2e:ui": "npm --prefix e2e run test:ui",
+    "e2e:headed": "npm --prefix e2e run test:headed",
+    "e2e:report": "npm --prefix e2e run report"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/jest": "^30.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
+    "eslint": "^9.18.0",
+    "identity-obj-proxy": "^3.0.0",
+    "jest": "^30.3.0",
+    "jest-environment-jsdom": "^30.3.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,72 @@
+# docker-compose.test.yml — Integration test environment
+# Usage: docker compose -f docker/docker-compose.test.yml up --exit-code-from test-runner
+#
+# Spins up a fresh MySQL instance (no persistent volume) and runs
+# the integration test suite against it.
+#
+# Required env: MYSQL_TEST_ROOT_PASSWORD and MYSQL_TEST_PASSWORD must be set
+# (CI should generate random values per run).
+
+services:
+  mysql-test:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_TEST_ROOT_PASSWORD:?MYSQL_TEST_ROOT_PASSWORD must be set}
+      MYSQL_DATABASE: expense_management_test
+      MYSQL_USER: ${MYSQL_TEST_USER:-expense_test}
+      MYSQL_PASSWORD: ${MYSQL_TEST_PASSWORD:?MYSQL_TEST_PASSWORD must be set}
+    volumes:
+      # Use the canonical schema + stored procedures (the documented source of truth,
+      # also used by the e2e stack) instead of hand-maintained copies that drifted —
+      # they were missing comments/notifications, the user-preference columns, and the
+      # RESUBMITTED audit action. schema.sql has no CREATE DATABASE/USE, so tables land
+      # in the MYSQL_DATABASE (expense_management_test) created by the entrypoint.
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ../database/stored-procedures.sql:/docker-entrypoint-initdb.d/02-stored-procedures.sql:ro
+    # Authenticate as the app user against the target DB so the container only
+    # reports healthy once the init scripts have created the user/database.
+    # `mysqladmin ping` returns OK during the temp-server init phase, before the
+    # schema exists — which let test-runner start and hit "table doesn't exist".
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    tmpfs:
+      - /var/lib/mysql
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    command: npx jest --config jest.integration.config.ts --runInBand --forceExit --detectOpenHandles
+    working_dir: /app
+    environment:
+      - DB_HOST=mysql-test
+      - DB_PORT=3306
+      - DB_USER=${MYSQL_TEST_USER:-expense_test}
+      - DB_PASSWORD=${MYSQL_TEST_PASSWORD:?MYSQL_TEST_PASSWORD must be set}
+      - DB_NAME=expense_management_test
+      - NODE_ENV=test
+      - PORT=3000
+      - ENTRA_TENANT_ID=test-tenant-id
+      - ENTRA_CLIENT_ID=test-client-id
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

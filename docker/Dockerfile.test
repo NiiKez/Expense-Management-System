@@ -1,0 +1,15 @@
+# Test runner — installs all dependencies (including devDependencies)
+# and copies source for running integration tests via ts-jest.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+
+WORKDIR /app
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --chown=appuser:appgroup server/package.json server/package-lock.json ./
+# --ignore-scripts: prevents arbitrary code execution from postinstall hooks.
+RUN npm ci --ignore-scripts
+
+COPY --chown=appuser:appgroup server/ .
+
+USER appuser

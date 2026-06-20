@@ -1,0 +1,85 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Vite
+client/.vite/
+
+# Environment variables
+.env
+.envrc
+.env.local
+.env.*.local
+server/.env
+server/.env.*
+!server/.env.example
+client/.env
+client/.env.*
+!client/.env.example
+.npmrc
+
+# Uploads (keep .gitkeep)
+uploads/*
+!uploads/.gitkeep
+server/uploads/*
+!server/uploads/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+client/coverage/
+server/coverage/
+
+# Playwright (e2e)
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/playwright/.cache/
+
+# Playwright MCP / local debug artifacts
+.playwright-mcp/
+/*.png
+
+# Docker
+docker/grafana/data/
+docker/prometheus/data/
+docker/loki/data/
+docker/**/data/
+docker-compose.override.yml
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Database dumps / local backups
+*.sql.gz
+*.dump
+*.bak
+*.backup
+database/backups/
+
+docs/

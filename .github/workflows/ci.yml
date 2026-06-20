@@ -1,0 +1,261 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Locked-down default for all jobs. docker-push overrides with packages: write.
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Lint
+  # ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+
+  # ─────────────────────────────────────────────────────────────
+  # Unit Tests
+  # ─────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+      - run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: server/coverage/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────
+  # Build (TypeScript compilation)
+  # ─────────────────────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests]
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+  # ─────────────────────────────────────────────────────────────
+  # Client Tests (ESLint + Jest + TypeScript build)
+  # ─────────────────────────────────────────────────────────────
+  client-tests:
+    name: Client Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run build
+
+  # ─────────────────────────────────────────────────────────────
+  # Integration Tests (MySQL via Docker Compose)
+  # ─────────────────────────────────────────────────────────────
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate ephemeral MySQL test passwords
+        run: |
+          {
+            echo "MYSQL_TEST_ROOT_PASSWORD=$(openssl rand -hex 24)"
+            echo "MYSQL_TEST_PASSWORD=$(openssl rand -hex 24)"
+          } >> "$GITHUB_ENV"
+
+      # --exit-code-from already implies --abort-on-container-exit; passing both
+      # is redundant in newer compose versions.
+      - name: Run integration tests via docker-compose
+        run: docker compose -f docker/docker-compose.test.yml up --build --exit-code-from test-runner
+
+      - name: Tear down test stack
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v --remove-orphans
+
+  # ─────────────────────────────────────────────────────────────
+  # E2E Tests (Playwright — UI flows against host-run API + Vite, MySQL via Docker)
+  # ─────────────────────────────────────────────────────────────
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+            e2e/package-lock.json
+
+      - name: Install server deps
+        working-directory: server
+        run: npm ci
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Start MySQL (E2E stack)
+        run: docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml up -d --wait
+
+      - name: Run Playwright tests
+        working-directory: e2e
+        env:
+          CI: 'true'
+        run: npm test
+
+      - name: Tear down MySQL stack
+        if: always()
+        run: docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml down -v --remove-orphans
+
+      - name: Upload Playwright HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 14
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: e2e/test-results/
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────
+  # Docker Build
+  # ─────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [client-tests, integration-tests, e2e-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -f docker/Dockerfile -t expense-management-server:${{ github.sha }} .
+
+  # ─────────────────────────────────────────────────────────────
+  # Docker Push (main branch only)
+  # ─────────────────────────────────────────────────────────────
+  docker-push:
+    name: Docker Push
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        # Push the immutable SHA tag on every main-branch build. Move :latest
+        # only on tagged releases so :latest never points at an arbitrary commit.
+        run: |
+          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/expense-management-server
+          IMAGE_TAG=${{ github.sha }}
+
+          docker build -f docker/Dockerfile -t $IMAGE_NAME:$IMAGE_TAG .
+          docker push $IMAGE_NAME:$IMAGE_TAG
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+            docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_NAME:$RELEASE_TAG
+            docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_NAME:latest
+            docker push $IMAGE_NAME:$RELEASE_TAG
+            docker push $IMAGE_NAME:latest
+          fi

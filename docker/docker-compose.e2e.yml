@@ -1,0 +1,57 @@
+# Compose stack for Playwright E2E runs.
+#
+# This is NOT an overlay on docker-compose.yml — it's a standalone, single-service
+# stack. The full app stack runs the API in a Docker container, but the API's
+# stub-auth path requires `socket.remoteAddress` to be loopback. When the API
+# runs in Docker and Playwright (on the host) hits a port-forwarded port, the
+# request enters the container with Docker's bridge gateway IP, not loopback,
+# and the stub-auth check rightly rejects it.
+#
+# Workaround: run only MySQL in Docker (so the schema + seed are reproducible
+# and isolated), and let Playwright spawn the API and the Vite dev server on
+# the host via its `webServer` config — that way 127.0.0.1 is genuinely
+# loopback from the API's perspective.
+#
+# Credentials are intentionally hardcoded: the database is local-only (bound to
+# 127.0.0.1:3307), tmpfs-backed (wiped between runs), and contains only the
+# committed demo seed. Nothing here is sensitive.
+#
+# Usage:
+#   docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml up -d --wait
+#   ... run tests ...
+#   docker compose -p fullstack-e2e -f docker/docker-compose.e2e.yml down -v
+
+services:
+  mysql-e2e:
+    image: mysql:8.0
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: e2e-root-password
+      MYSQL_DATABASE: expense_management_e2e
+      MYSQL_USER: expense_app
+      MYSQL_PASSWORD: e2e-app-password
+    volumes:
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../database/stored-procedures.sql:/docker-entrypoint-initdb.d/02-stored-procedures.sql:ro
+      - ../database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    restart: "no"
