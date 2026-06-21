@@ -23,7 +23,7 @@
 
 services:
   mysql-e2e:
-    image: mysql:8.0
+    image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
     ports:
       - "127.0.0.1:3307:3306"
     environment:
@@ -40,7 +40,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+        - MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$$MYSQL_USER" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
       interval: 5s
       timeout: 5s
       retries: 30

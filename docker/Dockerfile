@@ -18,9 +18,17 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 WORKDIR /app
 ENV NODE_ENV=production
 
+# OCI metadata links the published GHCR image back to the source repo/commit.
+# CI can pass --build-arg IMAGE_REVISION=$GITHUB_SHA for provenance.
+ARG IMAGE_REVISION=""
+LABEL org.opencontainers.image.title="expense-management-server" \
+      org.opencontainers.image.description="Expense Management System API (Node.js/Express)" \
+      org.opencontainers.image.source="https://github.com/NiiKez/Expense-Management-System" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}"
+
 # tini as PID 1 so the app receives SIGTERM on `docker stop` and shuts down
 # gracefully (drains the MySQL pool); also reaps any zombie child processes.
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini=0.19.0-r3
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 

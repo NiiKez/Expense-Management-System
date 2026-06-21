@@ -9,7 +9,7 @@
 
 services:
   mysql-test:
-    image: mysql:8.0
+    image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_TEST_ROOT_PASSWORD:?MYSQL_TEST_ROOT_PASSWORD must be set}
       MYSQL_DATABASE: expense_management_test
@@ -30,7 +30,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+        - MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$$MYSQL_USER" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
       interval: 5s
       timeout: 3s
       retries: 10
@@ -46,12 +46,18 @@ services:
       - SETGID
       - SETUID
       - DAC_OVERRIDE
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2.0
 
   test-runner:
     build:
       context: ..
       dockerfile: docker/Dockerfile.test
-    command: npx jest --config jest.integration.config.ts --runInBand --forceExit --detectOpenHandles
+    # Invoke the locally-installed jest binary directly (not `npx`, which would
+    # try to download jest into a non-writable home if local resolution ever
+    # failed, masking the real error).
+    command: node_modules/.bin/jest --config jest.integration.config.ts --runInBand --forceExit --detectOpenHandles
     working_dir: /app
     environment:
       - DB_HOST=mysql-test
@@ -70,3 +76,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Bound the test runner's resources so a runaway/forky test (or a hostile
+    # transitive devDependency) can't exhaust the CI runner. Not read_only: jest
+    # writes its transform cache under the working tree at runtime.
+    pids_limit: 512
+    mem_limit: 1g
+    cpus: 2.0

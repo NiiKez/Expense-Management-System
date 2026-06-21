@@ -80,7 +80,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+        - MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$$MYSQL_USER" -D "$$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
       interval: 10s
       timeout: 5s
       retries: 10
@@ -105,7 +105,8 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    init: true
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
@@ -144,7 +145,8 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.5.2
+    image: grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+    init: true
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     environment:
@@ -156,6 +158,10 @@ services:
       - GF_SECURITY_DISABLE_GRAVATAR=true
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      # Emit Grafana's Content-Security-Policy header (defense-in-depth vs XSS/
+      # clickjacking). Safe over the loopback HTTP binding; cookie_secure is
+      # intentionally NOT set — it requires TLS and would break HTTP login.
+      - GF_SECURITY_CONTENT_SECURITY_POLICY=true
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -183,7 +189,8 @@ services:
     restart: unless-stopped
 
   loki:
-    image: grafana/loki:3.3.2
+    image: grafana/loki:3.3.2@sha256:8af2de1abbdd7aa92b27c9bcc96f0f4140c9096b507c77921ffddf1c6ad6c48f
+    init: true
     # No host port published — Loki is an internal datasource consumed by
     # Grafana and Promtail over the Docker network. Querying happens through
     # Grafana's Explore UI, not directly.
@@ -211,14 +218,68 @@ services:
         max-file: "3"
     restart: unless-stopped
 
+  # Read-only Docker API gateway for Promtail's container discovery. Promtail
+  # needs the daemon to list containers and stream their logs; mounting the raw
+  # /var/run/docker.sock into Promtail would expose the entire Docker API — every
+  # container's environment (incl. the MySQL/Grafana passwords) via
+  # /containers/{id}/json, plus a container-escape path. This proxy exposes ONLY
+  # the read endpoints Promtail needs (container list/inspect/logs) and refuses
+  # every write/exec/create call (POST=0), so no log-shipping process ever
+  # touches the socket. The proxy is the single component holding the socket and
+  # has no write capability of its own.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
+    environment:
+      # CONTAINERS+NETWORKS are the read endpoints Promtail's docker_sd needs
+      # (list/inspect/logs, plus network labels). Everything else stays denied;
+      # POST=0 blocks every write/create/exec call.
+      - CONTAINERS=1
+      - NETWORKS=1
+      - POST=0
+      - EXEC=0
+      - IMAGES=0
+      - VOLUMES=0
+      - INFO=0
+      - SERVICES=0
+      - TASKS=0
+      - SWARM=0
+      - SYSTEM=0
+      - SECRETS=0
+      - CONFIGS=0
+      - AUTH=0
+      - BUILD=0
+      - COMMIT=0
+      - DISTRIBUTION=0
+      - NODES=0
+      - PLUGINS=0
+      - SESSION=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Not read_only: the entrypoint regenerates haproxy.cfg from its bundled
+    # template into /usr/local/etc/haproxy at startup. cap_drop ALL +
+    # no-new-privileges + the read-only socket + POST=0 keep it contained.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
   promtail:
-    image: grafana/promtail:3.3.2
-    # Mounts the Docker socket so Promtail can discover containers and tail
-    # their stdout/stderr via the Docker daemon — no app-side changes needed.
-    # Read-only mount; Promtail only needs read access to logs and metadata.
+    image: grafana/promtail:3.3.2@sha256:cb4990801ec58975c5e231057c2bcf204c85fac428eec65ad66e0016c64b9608
+    # Discovers containers and tails their logs through the Docker API, but only
+    # via the read-only docker-socket-proxy — Promtail itself never mounts the
+    # socket, so it cannot reach the daemon's write/exec endpoints.
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - promtail_positions:/tmp
     command: -config.file=/etc/promtail/config.yml -config.expand-env=true
     environment:
@@ -226,10 +287,18 @@ services:
     depends_on:
       loki:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    # Non-root + read-only root FS. Positions persist on the promtail_positions
+    # volume mounted at /tmp (mode 1777) — the only path Promtail writes to now
+    # that it no longer holds the socket.
+    user: "10001:10001"
+    read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    init: true
     pids_limit: 128
     mem_limit: 256m
     cpus: 0.5

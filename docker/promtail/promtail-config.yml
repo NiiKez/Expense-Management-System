@@ -12,7 +12,9 @@ clients:
 scrape_configs:
   - job_name: docker
     docker_sd_configs:
-      - host: unix:///var/run/docker.sock
+      # Reach the Docker API through the read-only docker-socket-proxy, never the
+      # raw socket. The proxy allows only container list/inspect/logs (POST=0).
+      - host: tcp://docker-socket-proxy:2375
         refresh_interval: 5s
     relabel_configs:
       # Only collect logs from this Compose project. Without this keep rule,
