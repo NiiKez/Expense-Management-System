@@ -66,6 +66,39 @@ describe('errorHandler', () => {
     expect(body).not.toContain('internal/lib');
   });
 
+  // Every third-party/middleware HTTP status maps to a fixed, status-appropriate
+  // message — the original err.message (which may carry library internals) is never
+  // forwarded to the client. Covers the full genericHttpMessage mapping plus the
+  // out-of-table default.
+  it.each([
+    [400, 'Invalid request'],
+    [401, 'Unauthorized'],
+    [403, 'Forbidden'],
+    [404, 'Not found'],
+    [405, 'Method not allowed'],
+    [406, 'Not acceptable'],
+    [409, 'Conflict'],
+    [413, 'Payload too large'],
+    [415, 'Unsupported media type'],
+    [429, 'Too many requests'],
+    [422, 'Request error'], // 4xx not in the table -> generic default
+  ])('maps a %i HTTP error to the generic message %p without echoing err.message', (status, expected) => {
+    const err = Object.assign(new Error('leaky internal detail xyz-123'), {
+      status,
+      type: 'some.library.error',
+    });
+    const res = mockResponse();
+
+    errorHandler(err, {} as Request, res as Response, jest.fn() as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(status);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: { message: expected, statusCode: status },
+    });
+    expect(JSON.stringify((res.json as jest.Mock).mock.calls[0][0])).not.toContain('leaky internal detail');
+  });
+
   it('responds with a generic 500 for an unexpected Error and leaks neither message nor stack', () => {
     const err = new Error('DB password is hunter2 at connection string');
     const res = mockResponse();
