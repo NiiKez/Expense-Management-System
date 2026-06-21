@@ -1,23 +1,19 @@
 import { defineConfig, devices } from '@playwright/test';
+import { E2E_DB } from './e2e-db';
 
 const E2E_BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:5173';
 const E2E_API_URL = process.env.E2E_API_URL ?? 'http://localhost:3000/api/v1';
 const isCI = !!process.env.CI;
 
-// Hardcoded local-only DB credentials — see docker/docker-compose.e2e.yml.
-// Nothing here is sensitive; the DB is bound to loopback and tmpfs-backed.
-const E2E_DB = {
-  DB_HOST: '127.0.0.1',
-  DB_PORT: '3307',
-  DB_USER: 'expense_app',
-  DB_PASSWORD: 'e2e-app-password',
-  DB_NAME: 'expense_management_e2e',
-};
-
 export default defineConfig({
   testDir: './tests',
-  // Tests share the same DB and seed, so run them serially. Parallelizing would
-  // require per-worker DB isolation that the schema doesn't support today.
+  // Reset to the canonical seed once up front (and fail fast if the DB is
+  // unreachable) before any browser starts. Per-test reseeding is handled by the
+  // auto `freshDatabase` fixture in fixtures/test.ts.
+  globalSetup: './global-setup',
+  // Tests run serially against a single shared DB that is reseeded before each
+  // test. Parallelizing would require per-worker DB isolation that the schema
+  // doesn't support today.
   fullyParallel: false,
   workers: 1,
   forbidOnly: isCI,
