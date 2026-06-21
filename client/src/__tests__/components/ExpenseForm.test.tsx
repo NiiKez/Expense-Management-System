@@ -25,8 +25,11 @@ jest.mock('@/services/auth', () => ({
 import api from '@/services/api'
 import ExpenseForm from '@/components/expenses/ExpenseForm'
 import { renderWithProviders } from '../helpers/renderWithProviders'
+import { Category, Status } from '@/types'
+import type { Expense } from '@/types'
 
 const mockedPost = api.post as jest.Mock
+const mockedPut = api.put as jest.Mock
 
 function ymd(offsetDays: number): string {
   const d = new Date()
@@ -76,5 +79,50 @@ describe('ExpenseForm validation (mirrors server rules)', () => {
     fireEvent.click(screen.getByTestId('expense-submit'))
 
     await waitFor(() => expect(mockedPost).toHaveBeenCalledWith('/expenses', expect.any(FormData)))
+  })
+})
+
+describe('ExpenseForm edit mode (changed-fields diff)', () => {
+  beforeEach(() => mockedPut.mockClear())
+
+  const initial: Expense = {
+    id: 1,
+    submitted_by: 1,
+    title: 'Old title',
+    description: null,
+    amount: 50,
+    currency: 'USD',
+    category: Category.OTHER,
+    expense_date: '2026-06-01T00:00:00Z',
+    status: Status.PENDING,
+    approved_by: null,
+    rejection_reason: null,
+    version: 1,
+    created_at: '2026-06-01T00:00:00Z',
+    updated_at: '2026-06-01T00:00:00Z',
+  }
+
+  it('sends only the fields that actually changed', async () => {
+    renderWithProviders(<ExpenseForm mode="edit" initial={initial} expenseId={1} />)
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'New title' } })
+
+    fireEvent.click(screen.getByTestId('expense-submit'))
+
+    await waitFor(() =>
+      expect(mockedPut).toHaveBeenCalledWith('/expenses/1', { title: 'New title' }),
+    )
+  })
+
+  it('submits null (not an empty string) when a populated description is cleared', async () => {
+    renderWithProviders(
+      <ExpenseForm mode="edit" initial={{ ...initial, description: 'Some notes' }} expenseId={1} />,
+    )
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: '' } })
+
+    fireEvent.click(screen.getByTestId('expense-submit'))
+
+    await waitFor(() =>
+      expect(mockedPut).toHaveBeenCalledWith('/expenses/1', { description: null }),
+    )
   })
 })

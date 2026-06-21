@@ -131,7 +131,8 @@ export default function UserManagement() {
       </p>
 
       {isPending ? (
-        <div className="space-y-2 rounded-lg border p-2">
+        <div className="space-y-2 rounded-lg border p-2" role="status" aria-live="polite">
+          <span className="sr-only">Loading users…</span>
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full" />
           ))}

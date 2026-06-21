@@ -13,7 +13,7 @@ import {
   useResubmitExpense,
 } from '@/queries/expenses'
 import { useMe } from '@/queries/me'
-import { CATEGORY_OPTIONS, CURRENCY_OPTIONS } from '@/lib/options'
+import { CATEGORY_OPTIONS, CURRENCY_OPTIONS, isSupportedCurrency } from '@/lib/options'
 import { formatCategory } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Label } from '@/components/ui/label'
@@ -61,9 +61,12 @@ const expenseFormSchema = z.object({
     ),
   currency: z
     .string()
-    .length(3, 'Currency must be a 3-letter code')
-    .regex(/^[A-Za-z]{3}$/, 'Currency must contain only letters')
-    .transform((v) => v.toUpperCase()),
+    .trim()
+    .regex(/^[A-Za-z]{3}$/, 'Currency must be a 3-letter code')
+    .transform((v) => v.toUpperCase())
+    // The UI only offers CURRENCY_OPTIONS; enforce that whitelist here too so a
+    // stray code (e.g. from a tampered request or legacy data) can't round-trip.
+    .refine(isSupportedCurrency, 'Select a supported currency'),
   category: z.enum(
     Object.values(Category) as [string, ...string[]],
     { error: 'Please select a category' },
@@ -208,11 +211,13 @@ export default function ExpenseForm({
 
   // Best-effort: only applies while the field is still at the 'USD' fallback, so
   // it never clobbers a currency the user already picked, and failures are silent.
+  // Only apply a supported currency — otherwise the Select (which lists only
+  // CURRENCY_OPTIONS) would render blank while the form value diverged.
   useEffect(() => {
     if (mode !== 'create') return
     const pref = me?.default_currency
-    if (pref && getValues('currency') === 'USD') {
-      setValue('currency', pref)
+    if (pref && isSupportedCurrency(pref) && getValues('currency') === 'USD') {
+      setValue('currency', pref.toUpperCase())
     }
   }, [mode, me, getValues, setValue])
 
@@ -271,25 +276,58 @@ export default function ExpenseForm({
 
     // Edit mode: plain JSON body, no receipt re-upload. A rejected expense
     // is resubmitted (back to PENDING); a pending one is updated in place.
-    const body: Record<string, unknown> = {
-      title: values.title,
-      amount: values.amount,
-      currency: values.currency,
-      category: values.category,
-      expense_date: values.expense_date,
-    }
-    if (values.description !== undefined) {
-      body.description = values.description
-    }
     // expenseId is always present in edit mode (EditExpense validates it).
     const id = expenseId as number
-    const mutation = isResubmit ? resubmitExpense : updateExpense
-    mutation.mutate(
+
+    // Normalize an empty/whitespace description to null so it round-trips
+    // consistently — the server stores '' as '', silently turning a
+    // previously-null description into an empty string on every edit. Apply the
+    // same rule to `initial` when diffing below so a legacy stored '' doesn't
+    // read as a change against the null we'd send.
+    const normalizeDescription = (d: string | null | undefined) =>
+      d && d.trim() ? d : null
+    const description = normalizeDescription(values.description)
+
+    if (isResubmit) {
+      // Resubmit re-files the (rejected) expense with its current values; the
+      // server allows an unchanged body here, so send the full set.
+      resubmitExpense.mutate(
+        {
+          id,
+          body: {
+            title: values.title,
+            amount: values.amount,
+            currency: values.currency,
+            category: values.category,
+            expense_date: values.expense_date,
+            description,
+          },
+        },
+        { onSuccess: () => navigate(`/expenses/${id}`), onError: handleSubmitError },
+      )
+      return
+    }
+
+    // Plain update: send only the fields that actually changed so the audit
+    // trail reflects the real diff. An unchanged edit is a no-op navigation
+    // (the server rejects an empty update body).
+    const body: Record<string, unknown> = {}
+    if (values.title !== initial?.title) body.title = values.title
+    if (values.amount !== initial?.amount) body.amount = values.amount
+    if (values.currency !== initial?.currency) body.currency = values.currency
+    if (values.category !== initial?.category) body.category = values.category
+    if (values.expense_date !== initial?.expense_date?.slice(0, 10)) {
+      body.expense_date = values.expense_date
+    }
+    if (description !== normalizeDescription(initial?.description)) body.description = description
+
+    if (Object.keys(body).length === 0) {
+      navigate(`/expenses/${id}`)
+      return
+    }
+    updateExpense.mutate(
       { id, body },
-      {
-        onSuccess: () => navigate(`/expenses/${id}`),
-        onError: handleSubmitError,
-      },
+      { onSuccess: () => navigate(`/expenses/${id}`), onError: handleSubmitError },
     )
   }
 

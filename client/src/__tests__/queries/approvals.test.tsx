@@ -104,6 +104,12 @@ describe('useApproveExpense', () => {
     expect(keys).toContain(JSON.stringify(approvalKeys.pendingRoot))
     expect(keys).toContain(JSON.stringify(['manager', 'stats']))
     expect(keys).toContain(JSON.stringify(['notifications']))
+    // A decision flips the expense's status, so the lists that can show it and
+    // the submitter's own roll-up must be invalidated too (not just the queue).
+    expect(keys).toContain(JSON.stringify(['expenses', 'list']))
+    expect(keys).toContain(JSON.stringify(['admin', 'expenses']))
+    expect(keys).toContain(JSON.stringify(['me', 'stats']))
+    expect(keys).toContain(JSON.stringify(['admin', 'stats']))
   })
 
   it('rolls the cache back when the request fails', async () => {
@@ -134,11 +140,17 @@ describe('useRejectExpense', () => {
       pageSize: 20,
     })
 
+    const spy = jest.spyOn(client, 'invalidateQueries')
     const { result } = renderHook(() => useRejectExpense(), { wrapper })
     result.current.mutate({ id: 2, reason: 'nope' })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockedApi.patch).toHaveBeenCalledWith('/approvals/2/reject', { reason: 'nope' })
     expect(client.getQueryData<Page<Expense>>(key)?.items.map((e) => e.id)).toEqual([1])
+
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(['expenses', 'list']))
+    expect(keys).toContain(JSON.stringify(['admin', 'expenses']))
+    expect(keys).toContain(JSON.stringify(['me', 'stats']))
   })
 })

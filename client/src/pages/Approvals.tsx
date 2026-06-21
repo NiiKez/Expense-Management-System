@@ -65,7 +65,8 @@ export default function Approvals() {
       )}
 
       {isPending ? (
-        <div className="space-y-2">
+        <div className="space-y-2" role="status" aria-live="polite">
+          <span className="sr-only">Loading pending approvals…</span>
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}

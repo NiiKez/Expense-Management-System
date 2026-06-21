@@ -1,9 +1,13 @@
 import React from 'react'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { axe, toHaveNoViolations } from 'jest-axe'
 import SortableHeader from '@/components/common/SortableHeader'
 import FileDropzone from '@/components/expenses/FileDropzone'
+import ExpenseTable from '@/components/expenses/ExpenseTable'
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
+import { Status, Category } from '@/types'
+import type { Expense } from '@/types'
 import type { SortState } from '@/lib/sort'
 
 // Wire jest-axe's custom matcher so `toHaveNoViolations` is available below.
@@ -63,6 +67,51 @@ describe('SortableHeader accessibility', () => {
 
   it('has no axe violations when active (aria-sort set)', async () => {
     const { container } = renderHeaderInFullTable({ key: 'title', order: 'asc' })
+    expect(await axe(container)).toHaveNoViolations()
+  })
+})
+
+describe('ExpenseTable accessibility', () => {
+  function mockExpense(): Expense {
+    return {
+      id: 7,
+      submitted_by: 1,
+      title: 'Hotel Stay',
+      description: null,
+      amount: 320,
+      currency: 'USD',
+      category: Category.TRAVEL,
+      expense_date: '2024-04-10T00:00:00Z',
+      status: Status.PENDING,
+      approved_by: null,
+      rejection_reason: null,
+      version: 1,
+      created_at: '2024-04-10T10:00:00Z',
+      updated_at: '2024-04-10T10:00:00Z',
+    }
+  }
+
+  function renderTable() {
+    return render(
+      <MemoryRouter>
+        <ExpenseTable
+          expenses={[mockExpense()]}
+          tableTestId="expense-table"
+          rowTestId={(id) => `expense-row-${id}`}
+          statusTestId={(id) => `expense-row-status-${id}`}
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  it('exposes navigation as a keyboard-focusable link rather than a mouse-only row handler', () => {
+    renderTable()
+    const link = screen.getByRole('link', { name: 'Hotel Stay' })
+    expect(link).toHaveAttribute('href', '/expenses/7')
+  })
+
+  it('has no axe violations (rows are not nested-interactive controls)', async () => {
+    const { container } = renderTable()
     expect(await axe(container)).toHaveNoViolations()
   })
 })

@@ -35,6 +35,23 @@ interface NotificationMutationContext {
 }
 
 /**
+ * Restores the unread-count badge to its pre-mutation value on rollback. When no
+ * count was cached (snapshot === undefined) the optimistic value must be *removed*
+ * — `setQueryData(key, undefined)` is a no-op in React Query, which would leave
+ * the badge stuck at its optimistic value until the next poll.
+ */
+function restoreUnreadCount(
+  qc: ReturnType<typeof useQueryClient>,
+  snapshot: number | undefined,
+): void {
+  if (typeof snapshot === 'number') {
+    qc.setQueryData<number>(notificationKeys.unreadCount, snapshot)
+  } else {
+    qc.removeQueries({ queryKey: notificationKeys.unreadCount })
+  }
+}
+
+/**
  * GET /notifications/unread-count — the badge count. Polls every 30s so the
  * bell stays fresh without a websocket. The endpoint returns `{ count }`.
  */
@@ -108,10 +125,9 @@ export function useMarkNotificationRead(): UseMutationResult<
       return { listSnapshots, unreadSnapshot }
     },
     onError: (_err, _id, context) => {
-      context?.listSnapshots.forEach(([key, data]) => qc.setQueryData(key, data))
-      if (context && typeof context.unreadSnapshot === 'number') {
-        qc.setQueryData<number>(notificationKeys.unreadCount, context.unreadSnapshot)
-      }
+      if (!context) return
+      context.listSnapshots.forEach(([key, data]) => qc.setQueryData(key, data))
+      restoreUnreadCount(qc, context.unreadSnapshot)
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: notificationKeys.unreadCount })
@@ -154,10 +170,9 @@ export function useMarkAllNotificationsRead(): UseMutationResult<
       return { listSnapshots, unreadSnapshot }
     },
     onError: (_err, _vars, context) => {
-      context?.listSnapshots.forEach(([key, data]) => qc.setQueryData(key, data))
-      if (context && typeof context.unreadSnapshot === 'number') {
-        qc.setQueryData<number>(notificationKeys.unreadCount, context.unreadSnapshot)
-      }
+      if (!context) return
+      context.listSnapshots.forEach(([key, data]) => qc.setQueryData(key, data))
+      restoreUnreadCount(qc, context.unreadSnapshot)
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: notificationKeys.unreadCount })

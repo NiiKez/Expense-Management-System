@@ -175,6 +175,12 @@ describe('MyExpenses export', () => {
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
 
     await user.type(await screen.findByLabelText('Search expenses'), 'hotel')
+
+    // Export uses the debounced term so the file matches the on-screen table —
+    // wait for the debounce to reach the list query before exporting.
+    await waitFor(() =>
+      expect(mockedGet.mock.calls.some((c) => paramsOf(c)?.search === 'hotel')).toBe(true),
+    )
     await user.click(screen.getByTestId('export-csv'))
 
     await waitFor(() => expect(mockedDownload).toHaveBeenCalled())

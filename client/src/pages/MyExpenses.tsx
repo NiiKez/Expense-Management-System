@@ -17,6 +17,7 @@ import { useExpenses, type ExpenseListParams } from '@/queries/expenses'
 import ExpenseTable from '@/components/expenses/ExpenseTable'
 import { nextSort, type SortState } from '@/lib/sort'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
+import { useResetPageOnChange } from '@/lib/useResetPageOnChange'
 import EmptyState from '@/components/common/EmptyState'
 import PageHeader from '@/components/common/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -48,9 +49,12 @@ export default function MyExpenses() {
   const [sort, setSort] = useState<SortState>({ key: null, order: 'desc' })
   const [exporting, setExporting] = useState(false)
 
+  // Reset to page 1 whenever the debounced search changes (see the hook).
+  const effectivePage = useResetPageOnChange(debouncedSearch, page, setPage)
+
   // Build the query params from the current filter/sort/page state. A change to
   // any of these changes the query key, so the hook refetches automatically.
-  const params: ExpenseListParams = { page, pageSize: PAGE_SIZE }
+  const params: ExpenseListParams = { page: effectivePage, pageSize: PAGE_SIZE }
   if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
   if (statusFilter) params.status = statusFilter
   if (categoryFilter) params.category = categoryFilter
@@ -72,7 +76,8 @@ export default function MyExpenses() {
     setExporting(true)
     try {
       const params: Record<string, string> = {}
-      if (search.trim()) params.search = search.trim()
+      // Use the debounced term so the export matches what the table is showing.
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
       if (statusFilter) params.status = statusFilter
       if (categoryFilter) params.category = categoryFilter
       if (sort.key) {
@@ -87,10 +92,8 @@ export default function MyExpenses() {
     }
   }
 
-  // Reset to page 1 when filters change
   const handleSearch = (value: string) => {
     setSearch(value)
-    setPage(1)
   }
   const handleStatus = (value: string) => {
     setStatusFilter(value === ALL ? '' : value)
@@ -175,7 +178,12 @@ export default function MyExpenses() {
 
       {/* Table */}
       {isPending ? (
-        <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
+        <div
+          className="overflow-hidden rounded-lg border bg-card shadow-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="sr-only">Loading expenses…</span>
           <div className="border-b bg-muted/40 px-4 py-3">
             <Skeleton className="h-4 w-24" />
           </div>

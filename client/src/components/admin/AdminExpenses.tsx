@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Status, Category } from '@/types'
 import { useAdminExpenses, type AdminExpenseParams } from '@/queries/admin'
 import {
@@ -13,6 +13,7 @@ import StatusBadge from '@/components/expenses/StatusBadge'
 import SortableHeader from '@/components/common/SortableHeader'
 import { nextSort, type SortState } from '@/lib/sort'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
+import { useResetPageOnChange } from '@/lib/useResetPageOnChange'
 import EmptyState from '@/components/common/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -51,7 +52,6 @@ const INITIAL_FILTERS: Filters = {
 const PAGE_SIZE = 20
 
 export default function AdminExpenses() {
-  const navigate = useNavigate()
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS)
   const [sort, setSort] = useState<SortState>({ key: null, order: 'desc' })
@@ -61,8 +61,11 @@ export default function AdminExpenses() {
   // params below intentionally read `debouncedSearch`, not `filters.search`.
   const debouncedSearch = useDebouncedValue(filters.search, 300)
 
+  // Reset to page 1 whenever the debounced search changes (see the hook).
+  const effectivePage = useResetPageOnChange(debouncedSearch, page, setPage)
+
   const params: AdminExpenseParams = {
-    page,
+    page: effectivePage,
     pageSize: PAGE_SIZE,
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
     ...(filters.status ? { status: filters.status } : {}),
@@ -87,6 +90,12 @@ export default function AdminExpenses() {
     setPage(1)
   }
 
+  // The free-text search is debounced; page is reset via the effect above when
+  // the debounced term settles (not on each keystroke).
+  const handleSearchChange = (value: string) => {
+    setFilters((prev) => ({ ...prev, search: value }))
+  }
+
   const clearFilters = () => {
     setFilters(INITIAL_FILTERS)
     setPage(1)
@@ -96,7 +105,8 @@ export default function AdminExpenses() {
     setExporting(true)
     try {
       const params: Record<string, string> = {}
-      if (filters.search) params.search = filters.search
+      // Use the debounced term so the export matches the on-screen table.
+      if (debouncedSearch) params.search = debouncedSearch
       if (filters.status) params.status = filters.status
       if (filters.category) params.category = filters.category
       if (filters.dateFrom) params.date_from = filters.dateFrom
@@ -126,7 +136,7 @@ export default function AdminExpenses() {
             data-testid="admin-filter-search"
             placeholder="Search by title…"
             value={filters.search}
-            onChange={(e) => handleFilterChange('search', e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             aria-label="Search expenses"
             className="pl-9"
           />
@@ -207,7 +217,8 @@ export default function AdminExpenses() {
 
       {/* Table */}
       {isPending ? (
-        <div className="space-y-2 rounded-lg border p-2">
+        <div className="space-y-2 rounded-lg border p-2" role="status" aria-live="polite">
+          <span className="sr-only">Loading expenses…</span>
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full" />
           ))}
@@ -244,18 +255,9 @@ export default function AdminExpenses() {
             </TableHeader>
             <TableBody>
               {expenses.map((e) => (
-                <TableRow
-                  key={e.id}
-                  data-testid={`admin-expense-row-${e.id}`}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/expenses/${e.id}`)}
-                >
+                <TableRow key={e.id} data-testid={`admin-expense-row-${e.id}`}>
                   <TableCell className="font-medium">
-                    <Link
-                      to={`/expenses/${e.id}`}
-                      onClick={(ev) => ev.stopPropagation()}
-                      className="hover:underline"
-                    >
+                    <Link to={`/expenses/${e.id}`} className="hover:underline">
                       {e.title}
                     </Link>
                   </TableCell>

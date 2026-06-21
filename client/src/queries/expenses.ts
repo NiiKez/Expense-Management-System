@@ -43,7 +43,7 @@ export const expenseKeys = {
  * shifts the employee's totals and, depending on role, the manager/admin
  * roll-ups). Invalidated together to kill cross-screen staleness.
  */
-function invalidateAllStats(qc: QueryClient): void {
+export function invalidateAllStats(qc: QueryClient): void {
   void qc.invalidateQueries({ queryKey: meKeys.stats })
   void qc.invalidateQueries({ queryKey: managerKeys.stats })
   void qc.invalidateQueries({ queryKey: adminKeys.stats })
