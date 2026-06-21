@@ -12,4 +12,9 @@ RUN npm ci --ignore-scripts
 
 COPY --chown=appuser:appgroup server/ .
 
+# Make the workdir writable by appuser so a future `jest --coverage` (or any test
+# writing under cwd) doesn't hit EACCES — npm ci ran as root, so /app and
+# node_modules are root-owned. node_modules stays root-owned (only executed).
+RUN chown appuser:appgroup /app
+
 USER appuser

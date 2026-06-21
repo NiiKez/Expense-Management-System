@@ -51,10 +51,11 @@ Each workspace (`server/`, `client/`, `e2e/`) has its own `package.json` and is 
    | Grafana     | `3001` (`GRAFANA_PORT`)            | Login with `GRAFANA_ADMIN_USER` / password     |
    | MySQL       | not published                      | Internal Compose network only                  |
    | Loki        | not published                      | Consumed by Grafana via internal network       |
-   | Promtail    | not published                      | Ships container logs to Loki internally        |
+   | Promtail    | not published                      | Ships container logs to Loki via the socket proxy |
+   | Docker proxy| not published                      | Read-only Docker API gateway for Promtail      |
    | API metrics | `9464` (internal listener, `METRICS_PORT`) | Scraped by Prometheus, never published to host |
 
-   The API runs as a non-root user (with `tini` as PID 1 for clean signal handling) on a read-only root filesystem, with dropped Linux capabilities and per-container CPU, memory, and PID limits; the application and primary MySQL images are pinned by digest (the observability images use fixed version tags) and container logs are size-capped (`max-size: 10m`, `max-file: 3`). Receipt uploads persist to the named `app_uploads` volume.
+   The API runs as a non-root user (with `tini` as PID 1 for clean signal handling) on a read-only root filesystem, with dropped Linux capabilities and per-container CPU, memory, and PID limits. Every container sets `no-new-privileges` and drops all capabilities, every image is pinned by digest, and container logs are size-capped (`max-size: 10m`, `max-file: 3`). Promtail discovers and tails container logs through a read-only Docker-socket proxy (it never mounts the Docker socket itself), so no log-shipping process can reach the daemon's write API or read other containers' secrets. Receipt uploads persist to the named `app_uploads` volume.
 
 4. Use `docker/docker-compose.override.yml` for ad-hoc local debugging overrides (e.g. publishing the MySQL port on `127.0.0.1:3306`). That file is gitignored.
 
