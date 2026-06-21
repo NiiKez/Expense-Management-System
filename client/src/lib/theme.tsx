@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react'
 
 type Theme = 'light' | 'dark'
 const STORAGE_KEY = 'theme'
@@ -22,8 +30,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     localStorage.setItem(STORAGE_KEY, theme)
   }, [theme])
-  const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
-  return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>
+  const toggle = useCallback(() => setTheme((t) => (t === 'dark' ? 'light' : 'dark')), [])
+  // Stable value/callback identities so useTheme consumers don't re-render on
+  // unrelated ThemeProvider renders.
+  const value = useMemo(() => ({ theme, toggle }), [theme, toggle])
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

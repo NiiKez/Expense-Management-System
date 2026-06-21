@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import {
   Table,
   TableBody,
@@ -33,7 +33,6 @@ export default function ExpenseTable({
   sort,
   onSort,
 }: ExpenseTableProps) {
-  const navigate = useNavigate()
   const sortable = !!(sort && onSort)
 
   return (
@@ -66,16 +65,10 @@ export default function ExpenseTable({
         </TableHeader>
         <TableBody>
           {expenses.map((e) => (
-            <TableRow
-              key={e.id}
-              data-testid={rowTestId(e.id)}
-              className="cursor-pointer"
-              onClick={() => navigate('/expenses/' + e.id)}
-            >
+            <TableRow key={e.id} data-testid={rowTestId(e.id)}>
               <TableCell>
                 <Link
                   to={'/expenses/' + e.id}
-                  onClick={(ev) => ev.stopPropagation()}
                   className="font-medium text-foreground underline-offset-4 hover:text-primary hover:underline"
                 >
                   {e.title}

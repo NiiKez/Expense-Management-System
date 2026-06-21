@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { loginRequest } from '../services/auth';
@@ -38,11 +38,14 @@ function StubAuthProvider({ children }: { children: ReactNode }) {
     clearStoredStubUser();
   }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, isLoading: false, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+  // Memoize so useAuth consumers don't re-render when this provider re-renders
+  // without an actual auth change.
+  const value = useMemo(
+    () => ({ user, isAuthenticated: !!user, isLoading: false, login, logout }),
+    [user, login, logout],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 function MsalAuthProvider({ children }: { children: ReactNode }) {
@@ -70,19 +73,20 @@ function MsalAuthProvider({ children }: { children: ReactNode }) {
     void instance.logoutRedirect();
   }, [instance, queryClient]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated,
-        isLoading: isAuthenticated ? isLoading : false,
-        login,
-        logout,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  // Memoize so useAuth consumers don't re-render on every MsalAuthProvider
+  // render (MSAL state + the polled /me query re-render this often).
+  const value = useMemo(
+    () => ({
+      user,
+      isAuthenticated,
+      isLoading: isAuthenticated ? isLoading : false,
+      login,
+      logout,
+    }),
+    [user, isAuthenticated, isLoading, login, logout],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

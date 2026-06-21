@@ -95,6 +95,19 @@ describe('AuthContext — StubAuthProvider', () => {
     });
   });
 
+  describe('memoization', () => {
+    it('returns a stable context value across re-renders when auth state is unchanged', () => {
+      const { result, rerender } = renderHook(() => useAuth(), { wrapper });
+      const first = result.current;
+
+      rerender();
+
+      // Memoized provider value: no auth change ⇒ same object identity, so
+      // useAuth consumers don't re-render on unrelated provider renders.
+      expect(result.current).toBe(first);
+    });
+  });
+
   describe('login', () => {
     it('sets the user and marks authenticated after login', async () => {
       const { result } = renderHook(() => useAuth(), { wrapper });

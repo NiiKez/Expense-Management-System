@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import type { ComponentProps } from 'react'
 import { useAuditLogs, useUsers, type AuditLogParams } from '@/queries/admin'
 import { AuditAction } from '@/types'
-import type { Status } from '@/types'
 import {
   Table,
   TableBody,
@@ -28,6 +27,7 @@ import {
 } from '@/components/ui/select'
 import { formatRelativeTime, formatDate } from '@/lib/format'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
+import { useResetPageOnChange } from '@/lib/useResetPageOnChange'
 import { downloadFile } from '@/lib/download'
 import { toast } from 'sonner'
 import { ArrowRight, ChevronLeft, ChevronRight, Download, ScrollText } from 'lucide-react'
@@ -145,8 +145,11 @@ export default function AuditLog() {
   // Debounce the free-text expense-ID filter so typing fires one request per pause.
   const debouncedExpenseId = useDebouncedValue(filters.expenseId, 300)
 
+  // Reset to page 1 whenever the debounced expense-ID filter changes (see the hook).
+  const effectivePage = useResetPageOnChange(debouncedExpenseId, page, setPage)
+
   const params = useMemo<AuditLogParams>(() => {
-    const p: AuditLogParams = { page, pageSize: PAGE_SIZE }
+    const p: AuditLogParams = { page: effectivePage, pageSize: PAGE_SIZE }
     if (debouncedExpenseId) p.expense_id = debouncedExpenseId
     if (filters.performedBy) p.performed_by = filters.performedBy
     if (filters.action) p.action = filters.action
@@ -157,7 +160,7 @@ export default function AuditLog() {
       p.order = sort.order
     }
     return p
-  }, [page, debouncedExpenseId, filters.performedBy, filters.action, filters.dateFrom, filters.dateTo, sort])
+  }, [effectivePage, debouncedExpenseId, filters.performedBy, filters.action, filters.dateFrom, filters.dateTo, sort])
 
   const { data, isPending, isError, refetch } = useAuditLogs(params)
   const logs = data?.items ?? []
@@ -174,6 +177,12 @@ export default function AuditLog() {
     setPage(1)
   }
 
+  // The expense-ID filter is debounced; page is reset via the effect above when
+  // the debounced value settles (not on each keystroke).
+  const handleExpenseIdChange = (value: string) => {
+    setFilters((prev) => ({ ...prev, expenseId: value }))
+  }
+
   const hasFilters = Object.values(filters).some(Boolean)
 
   const clearFilters = () => {
@@ -185,7 +194,8 @@ export default function AuditLog() {
     setExporting(true)
     try {
       const params: Record<string, string> = {}
-      if (filters.expenseId) params.expense_id = filters.expenseId
+      // Use the debounced value so the export matches the on-screen table.
+      if (debouncedExpenseId) params.expense_id = debouncedExpenseId
       if (filters.performedBy) params.performed_by = filters.performedBy
       if (filters.action) params.action = filters.action
       if (filters.dateFrom) params.date_from = filters.dateFrom
@@ -223,7 +233,7 @@ export default function AuditLog() {
           type="text"
           placeholder="Expense ID"
           value={filters.expenseId}
-          onChange={(e) => handleFilterChange('expenseId', e.target.value)}
+          onChange={(e) => handleExpenseIdChange(e.target.value)}
           aria-label="Filter by expense ID"
           className="w-28 font-mono tabular-nums"
         />
@@ -300,7 +310,8 @@ export default function AuditLog() {
       )}
 
       {isPending ? (
-        <div className="space-y-2 rounded-lg border p-2">
+        <div className="space-y-2 rounded-lg border p-2" role="status" aria-live="polite">
+          <span className="sr-only">Loading audit log…</span>
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full" />
           ))}
@@ -365,13 +376,13 @@ export default function AuditLog() {
                         {log.old_status || log.new_status ? (
                           <span className="flex items-center gap-1.5">
                             {log.old_status ? (
-                              <StatusBadge status={log.old_status as Status} />
+                              <StatusBadge status={log.old_status} />
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}
                             <ArrowRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
                             {log.new_status ? (
-                              <StatusBadge status={log.new_status as Status} />
+                              <StatusBadge status={log.new_status} />
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}

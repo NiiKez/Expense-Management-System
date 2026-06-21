@@ -47,16 +47,24 @@ export function titleCaseEnum(value: string): string {
   return value
     .toLowerCase()
     .split(/[_\s]+/)
-    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(' ')
 }
 
 /**
- * Custom recharts tooltip matching the app surface. Typed loosely on purpose —
- * recharts' tooltip generics are painful and `any` keeps this resilient.
+ * Minimal contract for the bits of recharts' tooltip payload we actually read.
+ * All optional so a recharts shape change degrades gracefully instead of being
+ * swallowed by `any` (which would also hide our own typos).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function ChartTooltip(props: any) {
+interface ChartTooltipProps {
+  active?: boolean
+  label?: string | number
+  currency?: string
+  payload?: Array<{ value?: number | string; payload?: { count?: number } }>
+}
+
+/** Custom recharts tooltip matching the app surface. */
+export function ChartTooltip(props: ChartTooltipProps) {
   // `currency` is supplied by the chart via the <ChartTooltip currency=.../>
   // content element; recharts preserves it when it clones in active/payload.
   const { active, payload, label, currency = 'USD' } = props ?? {}

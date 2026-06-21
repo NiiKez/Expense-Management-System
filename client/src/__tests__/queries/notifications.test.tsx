@@ -40,7 +40,9 @@ function makeNotification(id: number, isRead: boolean | number): AppNotification
     expense_id: 7,
     actor_id: 2,
     message: `msg ${id}`,
-    is_read: isRead,
+    // The wire may send a MySQL TINYINT (0/1); cast to model that raw payload so
+    // we can assert useNotifications normalizes it via Boolean() on ingress.
+    is_read: isRead as unknown as boolean,
     created_at: '2024-02-01T00:00:00Z',
   }
 }
@@ -146,5 +148,23 @@ describe('useMarkAllNotificationsRead', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockedApi.post).toHaveBeenCalledWith('/notifications/read-all')
+  })
+
+  it('rollback clears the optimistic 0 badge when no prior count was cached', async () => {
+    mockedApi.post.mockRejectedValueOnce(new Error('boom'))
+    const { client, wrapper } = makeWrapper()
+    client.setQueryData<NotificationList>(notificationKeys.list(params), {
+      items: [makeNotification(1, false)],
+      unread: 1,
+    })
+    // Deliberately do NOT seed the unread-count query (snapshot === undefined).
+
+    const { result } = renderHook(() => useMarkAllNotificationsRead(), { wrapper })
+    result.current.mutate()
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    // onMutate optimistically set the badge to 0; rollback must clear it back to
+    // undefined (not leave it stuck at 0) so the next poll repopulates it.
+    expect(client.getQueryData<number>(notificationKeys.unreadCount)).toBeUndefined()
   })
 })

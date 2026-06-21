@@ -82,7 +82,7 @@ function getRequestInterceptor(instance: typeof api) {
   const handlers = (instance.interceptors.request as unknown as {
     handlers: Array<{ fulfilled: (config: InterceptorConfig) => Promise<InterceptorConfig> }>;
   }).handlers;
-  return handlers[handlers.length - 1].fulfilled;
+  return handlers[handlers.length - 1]!.fulfilled;
 }
 
 // Pulls the response interceptor's rejected handler (index 1 of the use() args).
@@ -90,7 +90,7 @@ function getResponseRejectedHandler(instance: typeof api) {
   const handlers = (instance.interceptors.response as unknown as {
     handlers: Array<{ rejected: (err: unknown) => Promise<unknown> }>;
   }).handlers;
-  return handlers[handlers.length - 1].rejected;
+  return handlers[handlers.length - 1]!.rejected;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ describe('api service', () => {
       const handlers = (api.interceptors.request as unknown as {
         handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
       }).handlers;
-      const interceptor = handlers[handlers.length - 1].fulfilled;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
 
       const config = { headers: {} as Record<string, string> };
       const result = await interceptor(config);
@@ -139,7 +139,7 @@ describe('api service', () => {
       const handlers = (api.interceptors.request as unknown as {
         handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
       }).handlers;
-      const interceptor = handlers[handlers.length - 1].fulfilled;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
 
       const config = { headers: {} as Record<string, string> };
       const result = await interceptor(config);
@@ -153,7 +153,7 @@ describe('api service', () => {
       const handlers = (api.interceptors.request as unknown as {
         handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
       }).handlers;
-      const interceptor = handlers[handlers.length - 1].fulfilled;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
 
       const config = { headers: {} as Record<string, string> };
       const result = await interceptor(config);

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
 import { AppErrorBoundary } from '@/components/common/ErrorBoundary'
@@ -9,6 +10,7 @@ interface AppShellProps {
 }
 
 export default function AppShell({ title, children }: AppShellProps) {
+  const { pathname } = useLocation()
   return (
     <div className="flex h-svh overflow-hidden bg-background">
       {/* Keyboard users can jump past the repeated sidebar/topbar nav straight to content. */}
@@ -28,8 +30,14 @@ export default function AppShell({ title, children }: AppShellProps) {
         >
           <div className="mx-auto w-full max-w-screen-xl">
             {/* A crash in the routed page shows a recovery UI here while the
-                sidebar/topbar stay usable. */}
-            <AppErrorBoundary>{children}</AppErrorBoundary>
+                sidebar/topbar stay usable. Keying the boundary on the path both
+                resets a crashed page on navigation and replays the page fade,
+                without remounting the surrounding shell. */}
+            <AppErrorBoundary key={pathname}>
+              <div className="animate-in fade-in duration-200 ease-[--ease-out-quart]">
+                {children}
+              </div>
+            </AppErrorBoundary>
           </div>
         </main>
       </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, FileText, Image as ImageIcon } from 'lucide-react'
@@ -86,6 +86,15 @@ export default function ExpenseDetail() {
   // Local UI error (receipt preview/download + invalid reference).
   const [error, setError] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  // Authoritative handle on the live object URL so we always revoke the previous
+  // one before creating the next (and exactly once on unmount), independent of
+  // React state-batching/effect timing.
+  const previewUrlRef = useRef<string | null>(null)
+  const setPreview = (url: string | null) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    previewUrlRef.current = url
+    setPreviewUrl(url)
+  }
 
   // Delete dialog state
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -109,12 +118,12 @@ export default function ExpenseDetail() {
     )
   }
 
-  // Revoke object URL on cleanup
+  // Revoke any outstanding object URL when the component unmounts.
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
-  }, [previewUrl])
+  }, [])
 
   const handlePreview = async (receipt: Receipt) => {
     if (
@@ -129,9 +138,8 @@ export default function ExpenseDetail() {
       setError('')
       const data = await fetchReceiptBlob(expenseId, receipt.id)
       const blob = new Blob([data], { type: receipt.mime_type })
-      const url = URL.createObjectURL(blob)
-      // Cleanup effect on previewUrl handles revoking previous URL when state changes.
-      setPreviewUrl(url)
+      // setPreview revokes the previous URL before swapping in the new one.
+      setPreview(URL.createObjectURL(blob))
     } catch {
       setError('Failed to load receipt preview.')
     }
@@ -164,10 +172,7 @@ export default function ExpenseDetail() {
   }
 
   const closePreview = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
-      setPreviewUrl(null)
-    }
+    setPreview(null)
   }
 
   const handleDelete = () => {
@@ -218,7 +223,8 @@ export default function ExpenseDetail() {
 
   if (expenseQuery.isPending) {
     return (
-      <div className="mx-auto w-full max-w-3xl space-y-4 py-4">
+      <div className="mx-auto w-full max-w-3xl space-y-4 py-4" role="status" aria-live="polite">
+        <span className="sr-only">Loading expense…</span>
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-32 w-full" />
@@ -536,7 +542,8 @@ export default function ExpenseDetail() {
         </CardHeader>
         <CardContent className="space-y-4">
           {commentsQuery.isPending ? (
-            <div className="space-y-2">
+            <div className="space-y-2" role="status" aria-live="polite">
+              <span className="sr-only">Loading comments…</span>
               <Skeleton className="h-14 w-full" />
               <Skeleton className="h-14 w-full" />
             </div>

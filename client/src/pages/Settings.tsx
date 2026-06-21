@@ -149,7 +149,8 @@ export default function Settings() {
       <PageHeader title="Settings" description="Manage your profile and notification preferences." />
 
       {loading ? (
-        <div className="space-y-6">
+        <div className="space-y-6" role="status" aria-live="polite">
+          <span className="sr-only">Loading settings…</span>
           <Skeleton className="h-48 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>

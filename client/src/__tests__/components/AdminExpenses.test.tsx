@@ -46,6 +46,14 @@ describe('AdminExpenses', () => {
     })
   })
 
+  it('announces the loading state to assistive tech', () => {
+    mockedGet.mockReset()
+    mockedGet.mockReturnValue(new Promise(() => {})) // never resolves → stays pending
+    renderWithProviders(<AdminExpenses />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading expenses…')
+  })
+
   it('renders the expense rows returned by the query', async () => {
     renderWithProviders(<AdminExpenses />)
 

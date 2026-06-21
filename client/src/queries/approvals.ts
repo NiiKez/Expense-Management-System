@@ -9,9 +9,8 @@ import {
 import api from '@/services/api'
 import type { PaginatedResponse, Expense } from '@/types'
 import { unwrapPage, type Page } from './utils'
-import { managerKeys } from './manager'
 import { adminKeys } from './admin'
-import { expenseKeys } from './expenses'
+import { expenseKeys, invalidateAllStats } from './expenses'
 import { notificationKeys } from './notifications'
 
 export interface PendingParams {
@@ -78,8 +77,13 @@ function rollback(
 function invalidateAfterDecision(qc: ReturnType<typeof useQueryClient>, id: number): void {
   void qc.invalidateQueries({ queryKey: approvalKeys.pendingRoot })
   void qc.invalidateQueries({ queryKey: expenseKeys.detail(id) })
-  void qc.invalidateQueries({ queryKey: managerKeys.stats })
-  void qc.invalidateQueries({ queryKey: adminKeys.stats })
+  // A decision flips an expense's status, so every list that can show it must
+  // refetch — not just the pending queue. Mirrors the expense write mutations.
+  void qc.invalidateQueries({ queryKey: expenseKeys.lists })
+  void qc.invalidateQueries({ queryKey: adminKeys.expensesRoot })
+  // The submitter's, manager's, and admin's roll-ups all shift on a decision;
+  // invalidate them together (see invalidateAllStats' contract).
+  invalidateAllStats(qc)
   void qc.invalidateQueries({ queryKey: notificationKeys.all })
 }
 

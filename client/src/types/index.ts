@@ -129,7 +129,9 @@ export interface AppNotification {
   expense_id: number | null
   actor_id: number | null
   message: string
-  is_read: boolean | number
+  // App-facing shape: always a real boolean. The wire may send a MySQL TINYINT
+  // (0/1); useNotifications normalizes it via Boolean() on ingress.
+  is_read: boolean
   created_at: string
 }
 

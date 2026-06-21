@@ -1,4 +1,4 @@
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, Link } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import Login from './pages/Login';
@@ -24,9 +24,9 @@ function NotFound() {
 }
 
 function App() {
-  const location = useLocation();
+  // The per-route fade + remount lives inside AppShell (around the page body), so
+  // navigating no longer tears down the persistent sidebar/topbar and their queries.
   return (
-    <div key={location.pathname} className="animate-in fade-in duration-200 ease-[--ease-out-quart]">
     <Routes>
       {/* Bare route — no shell */}
       <Route path="/login" element={<Login />} />
@@ -132,7 +132,6 @@ function App() {
         }
       />
     </Routes>
-    </div>
   );
 }
 
