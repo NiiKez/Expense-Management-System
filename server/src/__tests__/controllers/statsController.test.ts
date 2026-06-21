@@ -29,6 +29,15 @@ describe('statsController.getMyStats', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data });
     expect(next).not.toHaveBeenCalled();
   });
+
+  it('forwards model errors to next and does not write a response', async () => {
+    const err = new Error('user stats query failed');
+    mockedStatsModel.getUserStats.mockRejectedValue(err);
+    const req = mockRequest(); const res = mockResponse();
+    await getMyStats(req as Request, res as Response, next);
+    expect(next).toHaveBeenCalledWith(err);
+    expect(res.json).not.toHaveBeenCalled();
+  });
 });
 
 describe('statsController.getManagerStats', () => {
@@ -48,6 +57,16 @@ describe('statsController.getManagerStats', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data });
     expect(next).not.toHaveBeenCalled();
   });
+
+  it('forwards model errors to next and does not write a response', async () => {
+    const err = new Error('team stats query failed');
+    mockedStatsModel.getTeamStats.mockRejectedValue(err);
+    const req = mockRequest({ user: { id: 2, role: Role.MANAGER, email: 'manager@test.com', display_name: 'Manager' } });
+    const res = mockResponse();
+    await getManagerStats(req as Request, res as Response, next);
+    expect(next).toHaveBeenCalledWith(err);
+    expect(res.json).not.toHaveBeenCalled();
+  });
 });
 
 describe('statsController.getAdminStats', () => {
@@ -66,5 +85,15 @@ describe('statsController.getAdminStats', () => {
     expect(mockedStatsModel.getOrgStats).toHaveBeenCalledWith();
     expect(res.json).toHaveBeenCalledWith({ success: true, data });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('forwards model errors to next and does not write a response', async () => {
+    const err = new Error('org stats query failed');
+    mockedStatsModel.getOrgStats.mockRejectedValue(err);
+    const req = mockRequest({ user: { id: 3, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' } });
+    const res = mockResponse();
+    await getAdminStats(req as Request, res as Response, next);
+    expect(next).toHaveBeenCalledWith(err);
+    expect(res.json).not.toHaveBeenCalled();
   });
 });

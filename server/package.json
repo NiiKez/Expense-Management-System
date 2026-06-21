@@ -7,9 +7,9 @@
     "dev": "nodemon --exec ts-node server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest --forceExit --detectOpenHandles",
+    "test": "jest --detectOpenHandles",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
+    "test:coverage": "jest --coverage --detectOpenHandles",
     "test:integration": "jest --config jest.integration.config.ts --runInBand --forceExit --detectOpenHandles",
     "lint": "eslint src/ --ext .ts --resolve-plugins-relative-to ./node_modules"
   },

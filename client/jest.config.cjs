@@ -1,3 +1,9 @@
+// Pin the timezone before Jest forks its workers (they inherit this env at spawn,
+// so V8 reads TZ=UTC at their startup). Setting it later, e.g. in setupTests, is
+// too late — V8 has already cached the local zone. Without this, date-only
+// formatting in lib/format.test.ts rolls back a day west of UTC and flakes by host.
+process.env.TZ = 'UTC';
+
 /** @type {import('jest').Config} */
 const config = {
   preset: 'ts-jest',
@@ -44,13 +50,16 @@ const config = {
     '!src/main.tsx',
     '!src/vite-env.d.ts',
   ],
-  // Conservative ratchet just below current coverage. The global floor is low
-  // because most redesign UI (components/, pages/) is not yet unit-tested; the
-  // per-directory floor protects the security-sensitive services/ layer
-  // (env tenant/HTTPS allow-listing, auth) from regressing. Raise over time.
+  // Ratchet just below current coverage so it can only go up. NB: Jest's "global"
+  // floor applies only to files NOT matched by the services/ key below, so it measures
+  // components/pages/etc. (services is carved out at a much higher floor). A few points
+  // of buffer keeps a tiny change from flaking the gate. The per-directory floor
+  // protects the security-sensitive services/ layer (env tenant/HTTPS allow-listing,
+  // the MSAL bearer-token + 401-reauth interceptors) from regressing. Raise over time.
+  // Last calibrated against actual: whole-suite ~65%, services ~92%.
   coverageThreshold: {
-    global: { statements: 5, branches: 2, functions: 5, lines: 5 },
-    './src/services/': { statements: 76, branches: 74, functions: 76, lines: 76 },
+    global: { statements: 59, branches: 49, functions: 52, lines: 61 },
+    './src/services/': { statements: 90, branches: 90, functions: 92, lines: 90 },
   },
 };
 

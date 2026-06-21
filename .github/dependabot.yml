@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned and current. Combined with SHA-pinned `uses:`
+  # refs in workflows, this lets Dependabot bump the pinned SHA when a new
+  # release lands instead of trusting a mutable tag.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # npm dependencies per workspace.
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

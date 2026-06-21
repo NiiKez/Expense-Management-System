@@ -1,19 +1,51 @@
 import React from 'react';
 import { renderHook, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { User } from '../../types';
 import { Role } from '../../types';
+
+// Mutable mock state, flipped per-test. `mock*`-prefixed names are the only outer
+// identifiers jest.mock factories may reference (they're hoisted above imports).
+// AuthProvider reads IS_STUB_AUTH_MODE at RENDER time, so toggling mockIsStubAuthMode
+// before render selects StubAuthProvider (default true, for the suite above) vs
+// MsalAuthProvider (false) without re-importing the module or splitting React copies.
+let mockIsStubAuthMode = true;
+let mockIsAuthenticated = false;
+const mockLoginRedirect = jest.fn().mockResolvedValue(undefined);
+const mockLogoutRedirect = jest.fn().mockResolvedValue(undefined);
+let mockUseMeReturn: { data: User | undefined; isLoading: boolean; isError: boolean } = {
+  data: undefined,
+  isLoading: false,
+  isError: false,
+};
 
 // Prevent MSAL from initialising a real PublicClientApplication
 jest.mock('../../services/auth', () => ({
   msalInstance: { getAllAccounts: jest.fn(() => []) },
   msalReady: Promise.resolve(),
-  loginRequest: { scopes: [] },
+  loginRequest: { scopes: ['api://test/access_as_user'] },
 }));
 
-// Prevent MSAL React hooks from running (used only in MsalAuthProvider)
+// Drive the auth-mode branch in AuthProvider from a mutable flag.
+jest.mock('../../services/env', () => ({
+  __esModule: true,
+  get IS_STUB_AUTH_MODE() {
+    return mockIsStubAuthMode;
+  },
+}));
+
+// MSAL React hooks (used only in MsalAuthProvider) — controllable per test.
 jest.mock('@azure/msal-react', () => ({
-  useMsal: () => ({ instance: { loginRedirect: jest.fn(), logoutRedirect: jest.fn() } }),
-  useIsAuthenticated: () => false,
+  useMsal: () => ({ instance: { loginRedirect: mockLoginRedirect, logoutRedirect: mockLogoutRedirect } }),
+  useIsAuthenticated: () => mockIsAuthenticated,
+}));
+
+// The gated /me query — return controllable success/loading/error states directly,
+// so MsalAuthProvider's user/role/isLoading resolution can be asserted in isolation.
+jest.mock('../../queries/me', () => ({
+  __esModule: true,
+  useMe: () => mockUseMeReturn,
+  meKeys: { all: ['me'], me: ['me'] },
 }));
 
 // Prevent real HTTP calls from api.ts interceptor setup
@@ -165,5 +197,124 @@ describe('AuthContext — StubAuthProvider', () => {
       expect(sessionStorage.getItem('stub_user_id')).toBe(String(user.id));
       expect(sessionStorage.getItem('stub_user')).toBeNull();
     });
+  });
+});
+
+// ── MsalAuthProvider (production path, IS_STUB_AUTH_MODE forced false) ──
+//
+// The stub suite above runs with mockIsStubAuthMode=true (the default), so AuthProvider
+// picks StubAuthProvider. Here we flip it false so MsalAuthProvider renders, drive
+// @azure/msal-react auth state + redirect spies and the gated /me query from the
+// mutable mocks, and back useQueryClient with a real QueryClient so logout's
+// removeQueries(['me']) can be spied for real. React/react-query stay a single copy
+// (no module isolation), avoiding cross-instance "invalid hook call" errors.
+
+describe('AuthContext — MsalAuthProvider', () => {
+  let queryClient: QueryClient;
+  let removeQueriesSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    mockIsStubAuthMode = false;
+    mockIsAuthenticated = false;
+    mockUseMeReturn = { data: undefined, isLoading: false, isError: false };
+    mockLoginRedirect.mockClear();
+    mockLogoutRedirect.mockClear();
+
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    removeQueriesSpy = jest.spyOn(queryClient, 'removeQueries');
+  });
+
+  afterEach(() => {
+    // Restore stub mode for any later suites sharing this module instance.
+    mockIsStubAuthMode = true;
+    removeQueriesSpy.mockRestore();
+    queryClient.clear();
+  });
+
+  function renderMsalAuth() {
+    return renderHook(() => useAuth(), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>{children}</AuthProvider>
+        </QueryClientProvider>
+      ),
+    });
+  }
+
+  it('exposes the resolved user/role on a successful /me fetch', () => {
+    mockIsAuthenticated = true;
+    mockUseMeReturn = {
+      data: makeUser({ id: 42, display_name: 'Manager Mae', role: Role.MANAGER }),
+      isLoading: false,
+      isError: false,
+    };
+
+    const { result } = renderMsalAuth();
+
+    expect(result.current.user?.id).toBe(42);
+    expect(result.current.user?.role).toBe(Role.MANAGER);
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('reports isLoading while the /me query is loading (authenticated)', () => {
+    mockIsAuthenticated = true;
+    mockUseMeReturn = { data: undefined, isLoading: true, isError: false };
+
+    const { result } = renderMsalAuth();
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.user).toBeNull();
+  });
+
+  it('keeps isLoading false when not authenticated even if the query reports loading', () => {
+    // Contract: isAuthenticated ? isLoading : false — a signed-out user is never "loading".
+    mockIsAuthenticated = false;
+    mockUseMeReturn = { data: undefined, isLoading: true, isError: false };
+
+    const { result } = renderMsalAuth();
+
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.user).toBeNull();
+  });
+
+  it('exposes a null user when the /me fetch errors', () => {
+    mockIsAuthenticated = true;
+    mockUseMeReturn = { data: undefined, isLoading: false, isError: true };
+
+    const { result } = renderMsalAuth();
+
+    expect(result.current.user).toBeNull();
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('login() calls msal loginRedirect', async () => {
+    mockIsAuthenticated = false;
+
+    const { result } = renderMsalAuth();
+
+    await act(async () => {
+      await result.current.login();
+    });
+
+    expect(mockLoginRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  it('logout() clears the cached [me] query AND calls msal logoutRedirect', () => {
+    mockIsAuthenticated = true;
+    mockUseMeReturn = { data: makeUser({ id: 7 }), isLoading: false, isError: false };
+
+    const { result } = renderMsalAuth();
+
+    act(() => {
+      result.current.logout();
+    });
+
+    expect(removeQueriesSpy).toHaveBeenCalledTimes(1);
+    expect(removeQueriesSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
+    expect(mockLogoutRedirect).toHaveBeenCalledTimes(1);
   });
 });
