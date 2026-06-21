@@ -268,6 +268,82 @@ describe('Auth + RBAC Integration', () => {
   });
 
   // ────────────────────────────────────────────────────────────
+  // Manager scope — DENY path (the actual security boundary)
+  //
+  // The happy-path tests above wire EMPLOYEE_USER → MANAGER_USER as a reporting
+  // line, so a manager approving that report succeeds. These tests prove the
+  // converse: a manager must NOT approve/reject expenses outside their team, and
+  // must not approve their own. ADMIN_USER has manager_id = NULL (seedTestUsers
+  // never links it), so it is a non-report submitter without mutating the shared
+  // EMPLOYEE→MANAGER link other tests depend on.
+  // ────────────────────────────────────────────────────────────
+
+  describe('Manager scope enforcement (deny path)', () => {
+    it('should return 403 when a manager approves an expense from a non-report', async () => {
+      // ADMIN_USER (manager_id = NULL) submits — MANAGER_USER does not manage them.
+      actAs(ADMIN_USER);
+      const createRes = await request
+        .post('/api/v1/expenses')
+        .send({
+          title: 'Not in Manager team',
+          amount: 100,
+          currency: 'USD',
+          category: 'OTHER',
+          expense_date: '2026-04-01',
+        });
+      expect(createRes.status).toBe(201);
+      const expenseId = createRes.body.data.id;
+
+      actAs(MANAGER_USER);
+      const approveRes = await request.patch(`/api/v1/approvals/${expenseId}/approve`);
+
+      expect(approveRes.status).toBe(403);
+      expect(approveRes.body.success).toBe(false);
+    });
+
+    it('should return 403 when a manager rejects an expense from a non-report', async () => {
+      actAs(ADMIN_USER);
+      const createRes = await request
+        .post('/api/v1/expenses')
+        .send({
+          title: 'Not in Manager team (reject)',
+          amount: 100,
+          currency: 'USD',
+          category: 'OTHER',
+          expense_date: '2026-04-01',
+        });
+      const expenseId = createRes.body.data.id;
+
+      actAs(MANAGER_USER);
+      const rejectRes = await request
+        .patch(`/api/v1/approvals/${expenseId}/reject`)
+        .send({ reason: 'Out of scope for this manager' });
+
+      expect(rejectRes.status).toBe(403);
+      expect(rejectRes.body.success).toBe(false);
+    });
+
+    it('should return 403 when a manager approves their own expense', async () => {
+      actAs(MANAGER_USER);
+      const createRes = await request
+        .post('/api/v1/expenses')
+        .send({
+          title: 'Manager self-approval attempt',
+          amount: 100,
+          currency: 'USD',
+          category: 'OTHER',
+          expense_date: '2026-04-01',
+        });
+      const expenseId = createRes.body.data.id;
+
+      const approveRes = await request.patch(`/api/v1/approvals/${expenseId}/approve`);
+
+      expect(approveRes.status).toBe(403);
+      expect(approveRes.body.success).toBe(false);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
   // Admin role access
   // ────────────────────────────────────────────────────────────
 

@@ -180,3 +180,43 @@ test.describe('API authorization — positive controls (not a blanket deny)', ()
     });
   }
 });
+
+test.describe('API authorization — expense data isolation (horizontal privilege)', () => {
+  // GET /expenses/:id and its receipt download pass the route's authenticate gate
+  // for ALL roles; the ownership/scope check lives in the controller. These tests
+  // prove that check actually denies cross-user access — removing it would let any
+  // authenticated user read every expense and receipt in the org.
+  //
+  // Seed ownership (database/seed.sql): dave(4) owns expenses 1 & 2; eve(5) owns 3 & 6;
+  // frank(6) owns 4. Reporting lines: bob(2) manages dave & eve; carol(3) manages
+  // frank & grace — so frank is NOT in bob's team.
+
+  test('GET /expenses/1 → allowed for the owner (positive control)', async ({ request }) => {
+    const res = await call(request, { method: 'get', path: '/expenses/1' }, EMPLOYEE); // dave owns 1
+    expect(res.ok()).toBeTruthy();
+    expect((await res.json()).data.id).toBe(1);
+  });
+
+  test("GET /expenses/3 → 403 for an employee reading another employee's expense", async ({ request }) => {
+    const res = await call(request, { method: 'get', path: '/expenses/3' }, EMPLOYEE); // eve owns 3
+    expect(res.status()).toBe(403);
+    expect((await res.json()).success).toBe(false);
+  });
+
+  test("GET /expenses/3/receipts/1 → 403 for an employee reading another's receipt", async ({ request }) => {
+    // Access is denied before the receipt is even looked up, so the id need not exist.
+    const res = await call(request, { method: 'get', path: '/expenses/3/receipts/1' }, EMPLOYEE);
+    expect(res.status()).toBe(403);
+  });
+
+  test("GET /expenses/1 → allowed for the submitter's manager (positive control)", async ({ request }) => {
+    const res = await call(request, { method: 'get', path: '/expenses/1' }, MANAGER); // bob manages dave
+    expect(res.ok()).toBeTruthy();
+  });
+
+  test("GET /expenses/4 → 403 for a manager reading a non-report's expense", async ({ request }) => {
+    const res = await call(request, { method: 'get', path: '/expenses/4' }, MANAGER); // frank reports to carol, not bob
+    expect(res.status()).toBe(403);
+    expect((await res.json()).success).toBe(false);
+  });
+});

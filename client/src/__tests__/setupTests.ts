@@ -1,5 +1,9 @@
 import '@testing-library/jest-dom';
 
+// NB: the timezone is pinned to UTC in jest.config.cjs (before workers fork) so
+// date-only formatting is deterministic across machines. Setting it here instead
+// would be too late — V8 caches the local zone before setupTests runs.
+
 // react-router-dom v7 uses the WHATWG URL API which requires TextEncoder/TextDecoder
 // jsdom doesn't include them — pull them from Node's built-in util module.
 import { TextEncoder, TextDecoder } from 'util';

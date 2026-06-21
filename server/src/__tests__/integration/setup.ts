@@ -124,12 +124,31 @@ export async function cleanTestData(): Promise<void> {
  * Tear down: clean everything and end the pool.
  */
 export async function teardownTestDb(): Promise<void> {
-  // See cleanTestData for why audit_logs is truncated rather than deleted.
-  await pool.execute('TRUNCATE TABLE audit_logs');
-  await pool.execute('DELETE FROM receipts');
-  await pool.execute('DELETE FROM comments');
-  await pool.execute('DELETE FROM notifications');
-  await pool.execute('DELETE FROM expenses');
-  await pool.execute('DELETE FROM users');
-  await pool.end();
+  // pool.end() MUST run even if a cleanup statement throws — otherwise the
+  // connection pool leaks and (now that --forceExit is gone) the run hangs.
+  try {
+    // See cleanTestData for why audit_logs is truncated rather than deleted.
+    await pool.execute('TRUNCATE TABLE audit_logs');
+
+    // FOREIGN_KEY_CHECKS is a per-connection (session) variable, so the disable
+    // and the DELETEs it protects MUST run on the same connection. Issuing them as
+    // separate pool.execute() calls can land them on different pooled connections,
+    // leaving the DELETEs — including the self-referential users.manager_id FK —
+    // running with checks still on and able to raise a RESTRICT error. Pin one
+    // connection for the whole sequence and release it before ending the pool.
+    const conn = await pool.getConnection();
+    try {
+      await conn.execute('SET FOREIGN_KEY_CHECKS = 0');
+      await conn.execute('DELETE FROM receipts');
+      await conn.execute('DELETE FROM comments');
+      await conn.execute('DELETE FROM notifications');
+      await conn.execute('DELETE FROM expenses');
+      await conn.execute('DELETE FROM users');
+      await conn.execute('SET FOREIGN_KEY_CHECKS = 1');
+    } finally {
+      conn.release();
+    }
+  } finally {
+    await pool.end();
+  }
 }

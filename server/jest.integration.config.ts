@@ -18,6 +18,10 @@ const config: Config = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
+  // The first beforeAll opens the pool and connects to a freshly-started MySQL.
+  // Under the Docker runner a cold connect can exceed Jest's 5s default and flake;
+  // give DB-backed tests a generous ceiling.
+  testTimeout: 30_000,
 };
 
 export default config;

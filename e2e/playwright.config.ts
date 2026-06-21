@@ -57,6 +57,14 @@ export default defineConfig({
         ALLOW_STUB_AUTH: 'true',
         CORS_ORIGIN: E2E_BASE_URL,
         LOG_LEVEL: 'warn',
+        // The whole serial suite hits the API from a single loopback IP, so every
+        // request shares one rate-limit bucket. The strict limiter (default 100/15min,
+        // applied to /approvals and /admin) is easily exceeded once retries replay
+        // failed tests in the same window, producing spurious 429s. Lift the caps for
+        // E2E so rate limiting never masquerades as a test failure.
+        API_RATE_LIMIT_MAX: '100000',
+        STRICT_RATE_LIMIT_MAX: '100000',
+        HEALTH_RATE_LIMIT_MAX: '100000',
         // Entra is unused in stub mode but the modules read these on import.
         ENTRA_TENANT_ID: '00000000-0000-0000-0000-000000000000',
         ENTRA_CLIENT_ID: '00000000-0000-0000-0000-000000000000',
