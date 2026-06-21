@@ -43,8 +43,9 @@ test.describe('Admin — registry & filters', () => {
     await expect(page.getByTestId('admin-expense-row-2')).toBeVisible();
   });
 
-  test('clicking a row navigates to the expense detail page', async ({ page }) => {
-    await page.getByTestId('admin-expense-row-2').click();
+  test('clicking an expense title navigates to the detail page', async ({ page }) => {
+    // Navigation is a keyboard-focusable title link (not a whole-row click handler).
+    await page.getByTestId('admin-expense-row-2').getByRole('link').click();
     await expect(page).toHaveURL(/\/expenses\/2$/);
     await expect(page.getByTestId('expense-detail')).toBeVisible();
     await expect(page.getByTestId('expense-detail-status')).toHaveText('APPROVED');
