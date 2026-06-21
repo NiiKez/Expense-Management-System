@@ -113,6 +113,21 @@ describe('ExpenseForm edit mode (changed-fields diff)', () => {
     )
   })
 
+  it('does not re-send amount when the API delivered it as a DECIMAL string and it was not edited', async () => {
+    // The wire shape for amount is a DECIMAL string ("50.00"), not a number. A
+    // strict `!==` against the coerced numeric form value would always differ and
+    // re-send amount on every edit; the diff must compare numerically.
+    const wireInitial = { ...initial, amount: '50.00' as unknown as number }
+    renderWithProviders(<ExpenseForm mode="edit" initial={wireInitial} expenseId={1} />)
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'New title' } })
+
+    fireEvent.click(screen.getByTestId('expense-submit'))
+
+    await waitFor(() =>
+      expect(mockedPut).toHaveBeenCalledWith('/expenses/1', { title: 'New title' }),
+    )
+  })
+
   it('submits null (not an empty string) when a populated description is cleared', async () => {
     renderWithProviders(
       <ExpenseForm mode="edit" initial={{ ...initial, description: 'Some notes' }} expenseId={1} />,

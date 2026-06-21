@@ -90,6 +90,9 @@ export default function ExpenseDetail() {
   // one before creating the next (and exactly once on unmount), independent of
   // React state-batching/effect timing.
   const previewUrlRef = useRef<string | null>(null)
+  // Tracks whether the component is still mounted so an async preview that
+  // resolves after unmount doesn't create an object URL the cleanup already ran.
+  const mountedRef = useRef(true)
   const setPreview = (url: string | null) => {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     previewUrlRef.current = url
@@ -121,6 +124,7 @@ export default function ExpenseDetail() {
   // Revoke any outstanding object URL when the component unmounts.
   useEffect(() => {
     return () => {
+      mountedRef.current = false
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
   }, [])
@@ -137,6 +141,9 @@ export default function ExpenseDetail() {
     try {
       setError('')
       const data = await fetchReceiptBlob(expenseId, receipt.id)
+      // The fetch may resolve after the user navigated away; don't create an
+      // object URL post-unmount (the cleanup has already run and won't revoke it).
+      if (!mountedRef.current) return
       const blob = new Blob([data], { type: receipt.mime_type })
       // setPreview revokes the previous URL before swapping in the new one.
       setPreview(URL.createObjectURL(blob))
