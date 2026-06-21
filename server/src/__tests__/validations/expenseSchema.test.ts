@@ -71,6 +71,31 @@ describe('createExpenseSchema', () => {
     expect(createExpenseSchema.safeParse({ ...validCreate(), currency: 'DOLLARS' }).success).toBe(false);
   });
 
+  it('rejects a 3-letter code that is not a supported currency', () => {
+    // 'XYZ' has the right shape but no FX rate, so it would later be summed at
+    // face value — reject it the same way the user default-currency is validated.
+    expect(createExpenseSchema.safeParse({ ...validCreate(), currency: 'XYZ' }).success).toBe(false);
+  });
+
+  it('accepts a supported currency case-insensitively (EUR / eur)', () => {
+    const upper = createExpenseSchema.safeParse({ ...validCreate(), currency: 'EUR' });
+    expect(upper.success).toBe(true);
+    if (upper.success) expect(upper.data.currency).toBe('EUR');
+    const lower = createExpenseSchema.safeParse({ ...validCreate(), currency: 'eur' });
+    expect(lower.success).toBe(true);
+    if (lower.success) expect(lower.data.currency).toBe('EUR');
+  });
+
+  it('rejects a title containing C0 control characters', () => {
+    expect(createExpenseSchema.safeParse({ ...validCreate(), title: 'bad\x00title' }).success).toBe(false);
+    expect(createExpenseSchema.safeParse({ ...validCreate(), title: 'esc\x1Btitle' }).success).toBe(false);
+  });
+
+  it('rejects a description containing C0 control characters', () => {
+    expect(createExpenseSchema.safeParse({ ...validCreate(), description: 'bad\x00desc' }).success).toBe(false);
+    expect(createExpenseSchema.safeParse({ ...validCreate(), description: 'esc\x1Bdesc' }).success).toBe(false);
+  });
+
   it('rejects an unknown category', () => {
     expect(createExpenseSchema.safeParse({ ...validCreate(), category: 'BRIBERY' }).success).toBe(false);
   });
@@ -143,6 +168,15 @@ describe('updateExpenseSchema', () => {
 
   it('rejects an over-precise amount on update', () => {
     expect(updateExpenseSchema.safeParse({ amount: 1.005 }).success).toBe(false);
+  });
+
+  it('rejects an unsupported currency on update', () => {
+    expect(updateExpenseSchema.safeParse({ currency: 'XYZ' }).success).toBe(false);
+  });
+
+  it('rejects control characters in title/description on update', () => {
+    expect(updateExpenseSchema.safeParse({ title: 'bad\x00title' }).success).toBe(false);
+    expect(updateExpenseSchema.safeParse({ description: 'bad\x1Bdesc' }).success).toBe(false);
   });
 
   // Privileged/unknown fields are stripped, so they can never reach the model.

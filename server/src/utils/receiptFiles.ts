@@ -36,7 +36,13 @@ export async function safeUnlinkReceipt(storedPath: string): Promise<void> {
 }
 
 export function sanitizeReceiptDownloadName(fileName: string): string {
-  return fileName.replace(/[^\w.\- ]/g, '_') || 'receipt';
+  const sanitized = fileName.replace(/[^\w.\- ]/g, '_').trim();
+  // A name that reduces to nothing, or to only dots ('.', '..', '....'), is not
+  // a usable filename — and dot-only names are path markers — so fall back.
+  if (sanitized === '' || /^\.+$/.test(sanitized)) {
+    return 'receipt';
+  }
+  return sanitized;
 }
 
 export function encodeReceiptDownloadName(fileName: string): string {

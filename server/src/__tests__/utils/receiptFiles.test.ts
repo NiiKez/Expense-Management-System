@@ -249,6 +249,18 @@ describe('sanitizeReceiptDownloadName', () => {
     // verify that behavior explicitly so the fallback contract is documented.
     expect(sanitizeReceiptDownloadName('///')).toBe('___');
   });
+
+  it('falls back to "receipt" for a name that reduces to only dots or spaces', () => {
+    // After sanitization, a value that is blank or only dots is not a usable
+    // filename (and ".." / "." are path markers), so it falls back to "receipt".
+    expect(sanitizeReceiptDownloadName('..')).toBe('receipt');
+    expect(sanitizeReceiptDownloadName('....')).toBe('receipt');
+    expect(sanitizeReceiptDownloadName('   ')).toBe('receipt');
+  });
+
+  it('preserves a normal name with a real extension (not dots-only)', () => {
+    expect(sanitizeReceiptDownloadName('invoice.2024.pdf')).toBe('invoice.2024.pdf');
+  });
 });
 
 describe('encodeReceiptDownloadName', () => {

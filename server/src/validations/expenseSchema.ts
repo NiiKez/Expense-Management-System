@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CATEGORIES } from '../utils/constants';
+import { CATEGORIES, CURRENCY_CODES } from '../utils/constants';
 import {
   MIN_EXPENSE_AMOUNT,
   MAX_EXPENSE_AMOUNT,
@@ -8,11 +8,26 @@ import {
 } from '../utils/constants';
 import { isStrictDate } from '../utils/requestParsing';
 
+// Reject C0 control characters in free-text fields. Shared by title/description
+// (and mirrored by reason/comment body below) so a crafted value can't smuggle
+// control bytes into stored text. \t (\x09) and \n (\x0A) are excluded so the
+// multi-line/tabbed values comments allow stay valid where reused.
+// eslint-disable-next-line no-control-regex -- intentional: rejecting control characters
+const hasNoControlChars = (v: string) => !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(v);
+
+// Currency: a 3-letter ISO 4217 code that, once uppercased, must be one the app
+// actually supports (we have an FX rate for it). An unsupported code like 'XYZ'
+// would otherwise be summed at face value — reject it the same way the user
+// default-currency preference is validated.
 const currencySchema = z
   .string()
   .trim()
   .regex(/^[A-Za-z]{3}$/, 'Currency must be a 3-letter ISO 4217 code')
-  .transform((value) => value.toUpperCase());
+  .transform((value) => value.toUpperCase())
+  .refine(
+    (value) => (CURRENCY_CODES as readonly string[]).includes(value),
+    { message: `Currency must be one of: ${CURRENCY_CODES.join(', ')}` },
+  );
 
 // Amount: 2 decimal places max (matches DB DECIMAL(10,2)).
 // Why multipleOf isn't enough: floating-point quirks would let 49.99999 slip past
@@ -48,11 +63,13 @@ export const createExpenseSchema = z.object({
     .string()
     .trim()
     .min(1, 'Title is required')
-    .max(255, 'Title must be 255 characters or fewer'),
+    .max(255, 'Title must be 255 characters or fewer')
+    .refine(hasNoControlChars, 'Title contains invalid control characters'),
   description: z
     .string()
     .trim()
     .max(5000, 'Description must be 5000 characters or fewer')
+    .refine(hasNoControlChars, 'Description contains invalid control characters')
     .nullable()
     .optional(),
   amount: amountSchema,
@@ -69,11 +86,13 @@ const editableExpenseFields = {
     .trim()
     .min(1, 'Title is required')
     .max(255, 'Title must be 255 characters or fewer')
+    .refine(hasNoControlChars, 'Title contains invalid control characters')
     .optional(),
   description: z
     .string()
     .trim()
     .max(5000, 'Description must be 5000 characters or fewer')
+    .refine(hasNoControlChars, 'Description contains invalid control characters')
     .nullable()
     .optional(),
   amount: amountSchema.optional(),
@@ -105,8 +124,7 @@ export const rejectExpenseSchema = z.object({
     .trim()
     .min(1, 'Rejection reason is required')
     .max(MAX_REJECTION_REASON_LENGTH, `Rejection reason must be ${MAX_REJECTION_REASON_LENGTH} characters or fewer`)
-    // eslint-disable-next-line no-control-regex -- intentional: rejecting control characters
-    .refine((v) => !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(v), 'Rejection reason contains invalid control characters'),
+    .refine(hasNoControlChars, 'Rejection reason contains invalid control characters'),
 });
 
 // Comment body: 1–2000 chars, control characters rejected (newlines/tabs kept).
@@ -116,8 +134,7 @@ export const createCommentSchema = z.object({
     .trim()
     .min(1, 'Comment cannot be empty')
     .max(2000, 'Comment must be 2000 characters or fewer')
-    // eslint-disable-next-line no-control-regex -- intentional: rejecting control characters except \t (\x09) and \n (\x0A)
-    .refine((v) => !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(v), 'Comment contains invalid control characters'),
+    .refine(hasNoControlChars, 'Comment contains invalid control characters'),
 });
 
 export type CreateExpenseInput = z.infer<typeof createExpenseSchema>;

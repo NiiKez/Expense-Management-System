@@ -10,6 +10,9 @@ export const AUDIT_ACTIONS = Object.values(AuditAction) as [string, ...string[]]
 export const DEFAULT_PAGE = 1;
 export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
+// Upper bound on the page number. Without it, a huge `page` produces a massive
+// SQL OFFSET (deep-pagination DoS); clamp it to a sane ceiling.
+export const MAX_PAGE = 100_000;
 
 // Upper bound on rows returned by a single CSV export. Exports that hit this
 // cap are logged so a truncated download never silently reads as "complete".

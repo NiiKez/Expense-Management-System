@@ -212,7 +212,10 @@ export const getExpenseById = async (req: Request, res: Response, next: NextFunc
         next(forbidden());
         return;
       }
-      const relationship = await verifyManagerRelationship(req, expense.submitted_by, { allowCachedFallback: false });
+      const relationship = await verifyManagerRelationship(req, expense.submitted_by, {
+        allowCachedFallback: false,
+        forceRefresh: true,
+      });
       if (!relationship.allowed) {
         next(forbidden(relationship.reason!));
         return;
@@ -399,7 +402,10 @@ export const downloadReceipt = async (req: Request, res: Response, next: NextFun
         next(forbidden());
         return;
       }
-      const relationship = await verifyManagerRelationship(req, expense.submitted_by, { allowCachedFallback: false });
+      const relationship = await verifyManagerRelationship(req, expense.submitted_by, {
+        allowCachedFallback: false,
+        forceRefresh: true,
+      });
       if (!relationship.allowed) {
         next(forbidden(relationship.reason!));
         return;

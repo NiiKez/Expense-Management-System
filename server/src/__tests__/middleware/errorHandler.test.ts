@@ -42,6 +42,30 @@ describe('errorHandler', () => {
     });
   });
 
+  it('returns a generic message for a non-400 4xx HTTP error instead of echoing err.message', () => {
+    // A third-party/middleware error carrying a 415 and a revealing message must
+    // not have that message forwarded to the client.
+    const err = Object.assign(new Error('unsupported charset "utf-7" from internal/lib/x'), {
+      status: 415,
+      type: 'charset.unsupported',
+    });
+    const res = mockResponse();
+
+    errorHandler(err, {} as Request, res as Response, jest.fn() as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(415);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: {
+        message: 'Unsupported media type',
+        statusCode: 415,
+      },
+    });
+    const body = JSON.stringify((res.json as jest.Mock).mock.calls[0][0]);
+    expect(body).not.toContain('utf-7');
+    expect(body).not.toContain('internal/lib');
+  });
+
   it('responds with a generic 500 for an unexpected Error and leaks neither message nor stack', () => {
     const err = new Error('DB password is hunter2 at connection string');
     const res = mockResponse();

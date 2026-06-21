@@ -15,6 +15,26 @@ function getHttpErrorStatus(err: Error): number | null {
   return status !== null && status >= 400 && status < 500 ? status : null;
 }
 
+// Fixed, status-appropriate messages for third-party/middleware HTTP errors
+// (body-parser, http-errors, etc.). App errors go through AppError with their own
+// intentional messages; here we never echo err.message to the client so a future
+// transitive library can't leak internals — the real message stays in the log.
+function genericHttpMessage(status: number): string {
+  switch (status) {
+    case 400: return 'Invalid request';
+    case 401: return 'Unauthorized';
+    case 403: return 'Forbidden';
+    case 404: return 'Not found';
+    case 405: return 'Method not allowed';
+    case 406: return 'Not acceptable';
+    case 409: return 'Conflict';
+    case 413: return 'Payload too large';
+    case 415: return 'Unsupported media type';
+    case 429: return 'Too many requests';
+    default: return 'Request error';
+  }
+}
+
 export const errorHandler = (
   err: Error,
   _req: Request,
@@ -53,7 +73,6 @@ export const errorHandler = (
 
   const httpStatus = getHttpErrorStatus(err);
   if (httpStatus) {
-    const message = httpStatus === 400 ? 'Invalid request' : err.message;
     logger.warn('HTTP request error', {
       statusCode: httpStatus,
       message: err.message,
@@ -63,7 +82,7 @@ export const errorHandler = (
     res.status(httpStatus).json({
       success: false,
       error: {
-        message,
+        message: genericHttpMessage(httpStatus),
         statusCode: httpStatus,
       },
     });

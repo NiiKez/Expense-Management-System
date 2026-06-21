@@ -92,10 +92,30 @@ describe('csv — escapeField (leading-whitespace formula bypass)', () => {
     expect(escapeOne('\n=evil()')).toBe('"\'\n=evil()"');
   });
 
-  it('does NOT prefix benign text that merely starts with whitespace', () => {
-    // Leading whitespace alone (no formula char following) is harmless and must
-    // pass through so ordinary indented text is not corrupted with a quote.
-    expect(escapeOne('  hello world')).toBe('  hello world');
+  it('neutralizes ANY leading whitespace, even with no formula char following', () => {
+    // Spreadsheets strip leading whitespace before deciding if a cell is a
+    // formula, so a value that merely *starts* with whitespace is treated as a
+    // potential lead-in and prefixed defensively.
+    expect(escapeOne('  hello world')).toBe("'  hello world");
+  });
+
+  it('neutralizes a leading TAB before a formula char (\\t=)', () => {
+    expect(escapeOne('\t=1+1')).toBe("'\t=1+1");
+  });
+
+  it('neutralizes a leading vertical tab (\\x0B) before a formula char', () => {
+    // \x0B is a C0 control char AND whitespace; not in [",\n\r] so no quoting.
+    expect(escapeOne('\x0B=1+1')).toBe("'\x0B=1+1");
+  });
+
+  it('neutralizes a leading NUL (\\x00) control char', () => {
+    // NUL is a C0 control char; it must be prefixed even with no formula char.
+    expect(escapeOne('\x00danger')).toBe("'\x00danger");
+  });
+
+  it('does NOT prefix a normal value that starts with a letter or digit', () => {
+    expect(escapeOne('Office supplies')).toBe('Office supplies');
+    expect(escapeOne('42 widgets')).toBe('42 widgets');
   });
 });
 
@@ -263,5 +283,13 @@ describe('csv — csvTimestamp (full ISO instant)', () => {
   it('returns a full ISO 8601 timestamp for a Date instance', () => {
     const d = new Date('2026-03-10T12:34:56.000Z');
     expect(csvTimestamp(d)).toBe('2026-03-10T12:34:56.000Z');
+  });
+
+  it('returns empty string for a malformed date value instead of throwing', () => {
+    // Previously .toISOString() ran unconditionally, so an unparseable value
+    // threw RangeError: Invalid time value and 500'd the whole CSV export.
+    expect(() => csvTimestamp('not-a-date')).not.toThrow();
+    expect(csvTimestamp('not-a-date')).toBe('');
+    expect(csvTimestamp(new Date('not-a-date'))).toBe('');
   });
 });

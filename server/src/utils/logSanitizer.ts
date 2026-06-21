@@ -6,6 +6,27 @@ const SENSITIVE_FIELD_PATTERN = /(access_token|refresh_token|id_token|assertion|
 const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 4;
 
+// Value-level scrubbing: secrets that live INSIDE a string value (not as their
+// own key) — e.g. an OAuth redirect URL or a "Bearer <jwt>" in a message — would
+// slip past the key-name redaction above. Each pattern below is flat and
+// character-class based (no nested quantifiers) to avoid catastrophic
+// backtracking on hostile input.
+
+// Query-string params whose value carries a credential/secret.
+const SENSITIVE_QUERY_PARAMS =
+  /\b(code|access_token|id_token|refresh_token|client_secret|assertion)=[^&\s#]+/gi;
+// "Bearer <token>" in any casing — redact the token, keep the scheme.
+const BEARER_TOKEN = /\bBearer\s+\S+/gi;
+// A JWT: three base64url segments separated by dots.
+const JWT_PATTERN = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+
+function scrubStringValue(value: string): string {
+  return value
+    .replace(SENSITIVE_QUERY_PARAMS, (_match, key: string) => `${key}=${REDACTED}`)
+    .replace(BEARER_TOKEN, `Bearer ${REDACTED}`)
+    .replace(JWT_PATTERN, REDACTED);
+}
+
 export function redactLogValue(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return value;
   if (depth >= MAX_DEPTH) return '[DEPTH_LIMIT]';
@@ -24,6 +45,10 @@ export function redactLogValue(value: unknown, depth = 0): unknown {
       }
     }
     return out;
+  }
+
+  if (typeof value === 'string') {
+    return scrubStringValue(value);
   }
 
   return value;

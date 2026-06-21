@@ -108,7 +108,10 @@ app.use('/api/v1/approvals', strictLimiter, approvalRoutes);
 app.use('/api/v1/manager', managerRoutes);
 app.use('/api/v1/admin', strictLimiter, adminRoutes);
 
-app.use((_req, _res, next) => {
+// Throttle unmatched routes too. Without apiLimiter here, requests to paths
+// outside /api/v1 (e.g. '/', '/favicon.ico', probes) reach the 404 handler with
+// no rate limit, letting an attacker cheaply flood helmet + body parsing + logging.
+app.use(apiLimiter, (_req, _res, next) => {
   next(notFound('Route'));
 });
 

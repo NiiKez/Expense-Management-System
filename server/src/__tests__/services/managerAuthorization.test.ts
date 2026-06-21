@@ -337,6 +337,33 @@ describe('managerAuthorization', () => {
         expect(result.reason).toContain('could not be verified from the local cache');
         expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
       });
+
+      it('does NOT honor the stub cache bypass in production (defense-in-depth)', async () => {
+        // Even with a matching manager_id and the stub flag set, a production
+        // NODE_ENV must never let the cached fallback rescue a tokenless request.
+        const previousEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          mockedUserModel.findById.mockResolvedValue(mockSubmitter({ manager_id: MANAGER_ID }));
+          const req = mockRequest({
+            user: {
+              id: MANAGER_ID,
+              role: Role.MANAGER,
+              email: 'manager@test.com',
+              display_name: 'Manager',
+              stubAuth: true,
+            },
+            headers: {},
+          });
+
+          const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+          expect(result.allowed).toBe(false);
+          expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+        } finally {
+          process.env.NODE_ENV = previousEnv;
+        }
+      });
     });
   });
 
@@ -377,12 +404,13 @@ describe('managerAuthorization', () => {
       const req = mockRequest({ headers: { authorization: 'Bearer token-123' } });
 
       await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).resolves.toBeUndefined();
-      // ensureCanAccessExpense pins allowCachedFallback: false.
+      // ensureCanAccessExpense pins allowCachedFallback: false and forces a live
+      // Graph check so read access tracks the current reporting chain (no TTL window).
       expect(mockedGraphApiService.isManagerOf).toHaveBeenCalledWith(
         MANAGER_ID,
         'entra-submitter',
         'token-123',
-        { allowCachedFallback: false },
+        { allowCachedFallback: false, forceRefresh: true },
       );
     });
 

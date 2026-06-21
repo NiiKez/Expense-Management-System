@@ -7,12 +7,15 @@ function escapeField(value: CsvValue): string {
   if (value === null || value === undefined) return '';
   let s = value instanceof Date ? value.toISOString() : String(value);
 
-  // Formula-injection guard (CWE-1236): a cell beginning with =, +, -, @ or a
-  // control char (tab/CR/LF) can be executed as a formula by Excel/Sheets/
-  // LibreOffice on open. Spreadsheets also STRIP leading whitespace before
-  // evaluating, so " =1+1" is still a live formula — hence the optional \s*
-  // before the formula chars. Prefix with a single quote to force literal text.
-  if (/^\s*[=+\-@]/.test(s) || /^[\t\r\n]/.test(s)) {
+  // Formula-injection guard (CWE-1236): a cell beginning with =, +, -, @ can be
+  // executed as a formula by Excel/Sheets/LibreOffice on open. Spreadsheets also
+  // STRIP leading whitespace before evaluating, so " =1+1" is still a live
+  // formula; and leading C0 control chars (\x00–\x1F, e.g. tab/CR/LF/vertical
+  // tab/NUL) can likewise be abused as lead-ins. Prefix any value whose first
+  // character is whitespace, a formula char, or a C0 control char with a single
+  // apostrophe to force the spreadsheet to treat the cell as literal text.
+  // eslint-disable-next-line no-control-regex -- intentional: neutralizing leading C0 control chars
+  if (/^[\s=+\-@\x00-\x1F]/.test(s)) {
     s = `'${s}`;
   }
 
@@ -50,5 +53,9 @@ export const csvDate = (v: unknown): string => {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 };
-export const csvTimestamp = (v: unknown): string =>
-  v ? new Date(v as string).toISOString() : '';
+export const csvTimestamp = (v: unknown): string => {
+  if (!v) return '';
+  const d = v instanceof Date ? v : new Date(v as string);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString();
+};

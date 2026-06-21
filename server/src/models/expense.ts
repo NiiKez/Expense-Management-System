@@ -315,9 +315,16 @@ export const expenseModel = {
         return { result: 'CONFLICT', expense: null, appliedFields };
       }
 
+      // Re-read on the same connection *before* commit so the returned row is the
+      // one this transaction just wrote. Reading via the pool after commit could
+      // land on a lagging replica/proxy and return a stale (or missing) row.
+      const [updatedRows] = await conn.execute<ExpenseRow[]>(
+        'SELECT * FROM expenses WHERE id = ? AND deleted_at IS NULL',
+        [id],
+      );
+
       await conn.commit();
-      const expense = await this.findById(id);
-      return { result: 'SUCCESS', expense, appliedFields };
+      return { result: 'SUCCESS', expense: updatedRows[0] || null, appliedFields };
     } catch (err) {
       await conn.rollback();
       throw err;
