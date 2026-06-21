@@ -330,6 +330,7 @@ describe('expenseController', () => {
 
       expect(mockedGraphApiService.isManagerOf).toHaveBeenCalledWith(1, 'entra-employee-99', 'token-123', {
         allowCachedFallback: false,
+        forceRefresh: true,
       });
       expect(res.json).toHaveBeenCalledWith({ success: true, data: { ...expense, receipts: [] } });
       expect(next).not.toHaveBeenCalled();

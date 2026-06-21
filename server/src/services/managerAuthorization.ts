@@ -17,7 +17,12 @@ export async function ensureCanAccessExpense(req: Request, submittedByUserId: nu
   if (req.user!.role === Role.EMPLOYEE) {
     throw forbidden();
   }
-  const relationship = await verifyManagerRelationship(req, submittedByUserId, { allowCachedFallback: false });
+  const relationship = await verifyManagerRelationship(req, submittedByUserId, {
+    allowCachedFallback: false,
+    // Force a live Graph check (like approve/reject) so a manager removed from a
+    // report's chain loses read access immediately rather than within the cache TTL.
+    forceRefresh: true,
+  });
   if (!relationship.allowed) {
     throw forbidden(relationship.reason!);
   }
@@ -65,8 +70,10 @@ export async function verifyManagerRelationship(
   // Stub auth (dev only) has no Bearer token to call Graph with. Trust the
   // cached manager_id so local development can exercise the approval flow.
   // server.ts gates ALLOW_STUB_AUTH to NODE_ENV=development, so this path is
-  // unreachable in production.
-  const stubAuth = req.user!.stubAuth === true;
+  // unreachable in production. The extra NODE_ENV check is defense-in-depth: the
+  // cache bypass is never honored in production even if a stub flag somehow leaks,
+  // so authorization no longer rests solely on the server.ts env gate.
+  const stubAuth = req.user!.stubAuth === true && process.env.NODE_ENV !== 'production';
 
   const allowFromDatabaseCache = (): ManagerRelationshipResult => {
     if (options.allowCachedFallback !== true && !stubAuth) {

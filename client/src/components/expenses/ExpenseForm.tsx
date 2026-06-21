@@ -313,7 +313,10 @@ export default function ExpenseForm({
     // (the server rejects an empty update body).
     const body: Record<string, unknown> = {}
     if (values.title !== initial?.title) body.title = values.title
-    if (values.amount !== initial?.amount) body.amount = values.amount
+    // `amount` arrives from the API as a DECIMAL string ("50.00") while the form
+    // value is a coerced number, so a strict `!==` would always differ and re-send
+    // amount on every edit — compare numerically so an unchanged amount is omitted.
+    if (Number(values.amount) !== Number(initial?.amount)) body.amount = values.amount
     if (values.currency !== initial?.currency) body.currency = values.currency
     if (values.category !== initial?.category) body.category = values.category
     if (values.expense_date !== initial?.expense_date?.slice(0, 10)) {

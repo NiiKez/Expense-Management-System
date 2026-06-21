@@ -3,8 +3,10 @@ const DEFAULT_AUDIENCES = (clientId: string): string[] => {
   if (explicit) {
     return explicit.split(',').map((s) => s.trim()).filter(Boolean);
   }
-  // Accept both v1.0 (api://{clientId}) and v2.0 ({clientId}) audiences by default
-  return [`api://${clientId}`, clientId];
+  // Accept both v1.0 (api://{clientId}) and v2.0 ({clientId}) audiences by default.
+  // Filter empties so a missing clientId never produces an empty-string audience,
+  // which jsonwebtoken would otherwise treat as a matchable value.
+  return [`api://${clientId}`, clientId].filter((aud) => aud && aud !== 'api://');
 };
 
 export const entraConfig = {

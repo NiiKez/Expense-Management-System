@@ -10,6 +10,8 @@
 // them into SQL CASE expressions. A currency not listed here (or the base
 // itself) is treated as a 1:1 multiplier, i.e. summed at face value.
 
+import logger from '../config/logger';
+
 export const BASE_CURRENCY = 'USD';
 
 // Units of BASE_CURRENCY per 1 unit of the given currency.
@@ -27,8 +29,18 @@ export const FX_RATES: Record<string, number> = {
  * through unchanged (treated as already base).
  */
 export function convertToBase(amount: number, currency: string): number {
-  const rate = FX_RATES[currency?.toUpperCase()] ?? 1;
-  return Math.round(amount * rate * 100) / 100;
+  const code = currency?.toUpperCase() ?? '';
+  const rate = FX_RATES[code];
+  if (rate === undefined && code !== '') {
+    // Unknown code: we sum at face value (rate 1), which can skew aggregate
+    // totals. Log it so the bad code is visible rather than silently absorbed.
+    logger.warn(`convertToBase: unknown currency code "${code}", summing at face value`, {
+      currency: code,
+    });
+  }
+  // Add Number.EPSILON before scaling so half-cent values stored just below
+  // their decimal (e.g. 1.005 -> 1.00499999...) round to the intended cent.
+  return Math.round((amount * (rate ?? 1) + Number.EPSILON) * 100) / 100;
 }
 
 /**

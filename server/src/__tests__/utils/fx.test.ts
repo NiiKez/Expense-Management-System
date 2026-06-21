@@ -1,3 +1,10 @@
+// Silence + spy on the logger so we can assert unknown currencies are warned
+// without printing during the test run.
+jest.mock('../../config/logger', () => ({
+  __esModule: true,
+  default: { warn: jest.fn(), debug: jest.fn(), info: jest.fn(), error: jest.fn() },
+}));
+
 import {
   BASE_CURRENCY,
   FX_RATES,
@@ -5,6 +12,13 @@ import {
   amountInBaseSql,
   sumInBaseSql,
 } from '../../utils/fx';
+import logger from '../../config/logger';
+
+const mockedLogger = logger as jest.Mocked<typeof logger>;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -65,11 +79,11 @@ describe('convertToBase', () => {
     expect(convertToBase(0.125, 'EUR')).toBe(0.14);
   });
 
-  it('inherits the classic IEEE-754 half-cent quirk (documented, not a bug)', () => {
-    // 1.005 looks like it should round to 1.01, but 1.005 is stored as
-    // ~1.00499999999999989, so 1.005 * 100 = 100.49999... -> Math.round -> 100 -> 1.00.
-    // This is standard JS float behavior; convertToBase does not correct for it.
-    expect(convertToBase(1.005, 'USD')).toBe(1);
+  it('rounds 1.005 up to 1.01 via the epsilon nudge (IEEE-754 half-cent fix)', () => {
+    // 1.005 is stored as ~1.00499999999999989, so a naive 1.005 * 100 = 100.4999...
+    // would Math.round down to 100 -> 1.00. Adding Number.EPSILON before scaling
+    // nudges it past the half-cent boundary so it rounds to the intended 1.01.
+    expect(convertToBase(1.005, 'USD')).toBe(1.01);
   });
 
   it('rounds a JPY conversion that produces many decimals', () => {
@@ -95,19 +109,32 @@ describe('convertToBase', () => {
 
   // ── Unknown / missing currency fallback ───────────────────────
 
-  it('treats an unknown currency as 1:1 (no throw)', () => {
-    expect(() => convertToBase(100, 'XYZ')).not.toThrow();
-    expect(convertToBase(100, 'XYZ')).toBe(100);
+  it('treats an unknown currency as 1:1 (no throw) and warns it was unrecognized', () => {
+    let result: number | undefined;
+    expect(() => {
+      result = convertToBase(100, 'XYZ');
+    }).not.toThrow();
+    expect(result).toBe(100);
+    // An unrecognized but non-empty code is summed at face value, which would
+    // skew aggregate totals — so it is logged at warn level for visibility.
+    expect(mockedLogger.warn).toHaveBeenCalledTimes(1);
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('XYZ'),
+      expect.objectContaining({ currency: 'XYZ' }),
+    );
   });
 
-  it('treats an empty currency string as 1:1', () => {
+  it('treats an empty currency string as 1:1 WITHOUT warning (no code supplied)', () => {
     expect(convertToBase(100, '')).toBe(100);
+    expect(mockedLogger.warn).not.toHaveBeenCalled();
   });
 
-  it('treats a null/undefined currency as 1:1 (optional-chaining guard)', () => {
-    // currency?.toUpperCase() yields undefined; FX_RATES[undefined] ?? 1 -> 1.
+  it('treats a null/undefined currency as 1:1 WITHOUT warning (optional-chaining guard)', () => {
+    // currency?.toUpperCase() yields undefined; FX_RATES[''] ?? 1 -> 1. A missing
+    // currency is the legitimate "no preference" case, so it must not log noise.
     expect(convertToBase(100, undefined as unknown as string)).toBe(100);
     expect(convertToBase(100, null as unknown as string)).toBe(100);
+    expect(mockedLogger.warn).not.toHaveBeenCalled();
   });
 
   // ── Edge-case amounts ─────────────────────────────────────────

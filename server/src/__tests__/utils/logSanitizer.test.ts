@@ -90,6 +90,53 @@ describe('redactLogValue', () => {
     });
   });
 
+  // ── Value-level scrubbing (secrets embedded inside string values) ──
+  // Key-name redaction misses secrets that live INSIDE a benign-keyed string —
+  // e.g. an OAuth redirect URL or a "Bearer <jwt>" inside a free-text message.
+  // These must be scrubbed by value, not just by key.
+
+  it('redacts sensitive query-string params inside a URL value', () => {
+    const redacted = redactLogValue({
+      url: 'https://app/callback?code=leak123&client_secret=topsecretvalue&state=keep',
+    }) as Record<string, unknown>;
+
+    const url = redacted.url as string;
+    // The credential VALUES are gone (the param names may still mention "secret").
+    expect(url).not.toContain('leak123');
+    expect(url).not.toContain('topsecretvalue');
+    expect(url).toContain('code=[REDACTED]');
+    expect(url).toContain('client_secret=[REDACTED]');
+    // Non-sensitive params are preserved.
+    expect(url).toContain('state=keep');
+  });
+
+  it('redacts a Bearer JWT embedded in a free-text message value', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dumm-signature_123';
+    const redacted = redactLogValue({
+      message: `auth failed for Authorization: Bearer ${jwt}`,
+    }) as Record<string, unknown>;
+
+    const message = redacted.message as string;
+    expect(message).not.toContain(jwt);
+    expect(message).toContain('Bearer [REDACTED]');
+  });
+
+  it('redacts a bare JWT-shaped substring even without a Bearer prefix', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.sig-part_456';
+    const redacted = redactLogValue(`token is ${jwt} now`);
+    expect(redacted).not.toContain(jwt);
+    expect(redacted).toContain('[REDACTED]');
+  });
+
+  it('leaves a benign string value untouched', () => {
+    expect(redactLogValue('a normal log line with no secrets')).toBe(
+      'a normal log line with no secrets',
+    );
+    expect(redactLogValue('https://app/page?state=keep&view=list')).toBe(
+      'https://app/page?state=keep&view=list',
+    );
+  });
+
   it('preserves null and undefined values', () => {
     expect(redactLogValue(null)).toBeNull();
     expect(redactLogValue(undefined)).toBeUndefined();

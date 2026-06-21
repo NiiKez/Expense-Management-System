@@ -252,6 +252,9 @@ function verifyToken(token: string): Promise<EntraIdTokenPayload> {
         algorithms: ['RS256'],
         issuer: issuers,
         audience: audiences,
+        // Small tolerance for clock drift between Entra and this host so a
+        // freshly-issued token with a near-future nbf isn't spuriously rejected.
+        clockTolerance: 5,
       },
       (err: Error | null, decoded: unknown) => {
         if (err) {
