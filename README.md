@@ -169,7 +169,8 @@ All routes live under `/api/v1/`:
 
 | Route                                       | Auth          | Notes                                                          |
 | ------------------------------------------- | ------------- | -------------------------------------------------------------- |
-| `GET  /health`                              | public        | DB connectivity check                                          |
+| `GET  /health`                              | public        | Readiness (DB connectivity check); `/health/ready` is an alias |
+| `GET  /health/live`                         | public        | Liveness — no dependencies, never touches the DB               |
 | `GET  /me`                                  | any role      | Current user profile (created/synced from JWT on first call)   |
 | `PATCH /me/preferences`                     | any role      | Update own preferences (default currency, notification toggles)|
 | `GET  /me/stats`                            | any role      | Personal aggregate stats for the dashboard                     |
@@ -251,6 +252,8 @@ Specs are serial (`workers: 1`, Chromium only), authenticate via `data-testid="s
 - **Prometheus** scrapes the API's internal `:9464` metrics endpoint (plus itself, Loki, Promtail, and Grafana). Custom metrics: `expense_submissions_total`, `expense_approvals_total`, `expense_resolution_seconds`, `api_request_duration_seconds`, `api_errors_total`, plus default Node.js metrics. Retention is capped at 15 days **and** 2 GB on disk (whichever hits first); the admin API and lifecycle endpoint are disabled.
 - **Grafana** is provisioned from `docker/grafana/provisioning/`. Both Prometheus and Loki are pre-wired as read-only datasources (Prometheus is default), with a provisioned expense dashboard. Sign-up, org creation, anonymous access, Gravatar, and usage analytics are all disabled.
 - **Loki + Promtail** — Promtail mounts the Docker socket (read-only), discovers only this project's containers (matched by an anchored Compose project label, so a sibling project such as `…-e2e` can't leak its logs in), and ships their stdout to Loki. The `app` container's JSON logs are parsed so `level` becomes a queryable label. Default retention is 7 days (168h, `docker/loki/loki-config.yml`). Query in Grafana Explore with LogQL, e.g. `{service="app", level="error"}`.
+- **Request correlation** — every request gets an `X-Request-Id` (an inbound one is honored, otherwise minted) that is echoed to the client and attached to its access and error log lines, so a single id ties a reported failure to its server-side trace.
+- **Graceful shutdown** — on `SIGTERM`/`SIGINT` the API stops accepting connections, lets in-flight requests drain, and closes the MySQL pool (with a hard-timeout fallback); process-level `unhandledRejection`/`uncaughtException` handlers log through the redaction format before draining.
 
 ## Security
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CATEGORIES, CURRENCY_CODES } from '../utils/constants';
+import { CATEGORIES, CURRENCY_CODES, isSupportedCurrency } from '../utils/constants';
 import {
   MIN_EXPENSE_AMOUNT,
   MAX_EXPENSE_AMOUNT,
@@ -25,14 +25,15 @@ const currencySchema = z
   .regex(/^[A-Za-z]{3}$/, 'Currency must be a 3-letter ISO 4217 code')
   .transform((value) => value.toUpperCase())
   .refine(
-    (value) => (CURRENCY_CODES as readonly string[]).includes(value),
+    // Shared membership check with the user default-currency validator.
+    (value) => isSupportedCurrency(value),
     { message: `Currency must be one of: ${CURRENCY_CODES.join(', ')}` },
   );
 
 // Amount: 2 decimal places max (matches DB DECIMAL(10,2)).
 // Why multipleOf isn't enough: floating-point quirks would let 49.99999 slip past
 // some checks. Round-trip through cents instead.
-const amountSchema = z
+const amountNumberSchema = z
   .coerce.number({ invalid_type_error: 'Amount must be a number' })
   .finite('Amount must be a finite number')
   .min(MIN_EXPENSE_AMOUNT, `Amount must be at least ${MIN_EXPENSE_AMOUNT}`)
@@ -41,6 +42,14 @@ const amountSchema = z
     (v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6,
     'Amount must have at most 2 decimal places',
   );
+
+// Guard the coercion: z.coerce.number runs JS Number(), and Number([5]) === 5,
+// so a JSON body like {"amount":[5]} would otherwise be accepted as 5. Reject
+// anything that isn't already a string or number before coercion runs.
+const amountSchema = z.preprocess(
+  (v) => (typeof v === 'string' || typeof v === 'number' ? v : NaN),
+  amountNumberSchema,
+);
 
 const expenseDateSchema = z
   .string()
@@ -78,7 +87,7 @@ export const createExpenseSchema = z.object({
     errorMap: () => ({ message: `Category must be one of: ${CATEGORIES.join(', ')}` }),
   }),
   expense_date: expenseDateSchema,
-});
+}).strict();
 
 const editableExpenseFields = {
   title: z
@@ -107,6 +116,7 @@ const editableExpenseFields = {
 
 export const updateExpenseSchema = z
   .object(editableExpenseFields)
+  .strict()
   .refine(
     (v) => Object.values(v).some((val) => val !== undefined),
     { message: 'Update body must contain at least one field' },
@@ -114,7 +124,7 @@ export const updateExpenseSchema = z
 
 // Resubmit reuses the same editable fields but, unlike update, allows an empty
 // body — resubmitting a rejected expense unchanged is valid.
-export const resubmitExpenseSchema = z.object(editableExpenseFields);
+export const resubmitExpenseSchema = z.object(editableExpenseFields).strict();
 
 // Why: rejection reason was previously validated inline in the controller — moving
 // it to a schema keeps validation centralized and lets us reject control characters.
@@ -125,7 +135,7 @@ export const rejectExpenseSchema = z.object({
     .min(1, 'Rejection reason is required')
     .max(MAX_REJECTION_REASON_LENGTH, `Rejection reason must be ${MAX_REJECTION_REASON_LENGTH} characters or fewer`)
     .refine(hasNoControlChars, 'Rejection reason contains invalid control characters'),
-});
+}).strict();
 
 // Comment body: 1–2000 chars, control characters rejected (newlines/tabs kept).
 export const createCommentSchema = z.object({
@@ -135,7 +145,7 @@ export const createCommentSchema = z.object({
     .min(1, 'Comment cannot be empty')
     .max(2000, 'Comment must be 2000 characters or fewer')
     .refine(hasNoControlChars, 'Comment contains invalid control characters'),
-});
+}).strict();
 
 export type CreateExpenseInput = z.infer<typeof createExpenseSchema>;
 export type UpdateExpenseInput = z.infer<typeof updateExpenseSchema>;

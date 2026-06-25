@@ -267,7 +267,10 @@ function verifyToken(token: string): Promise<EntraIdTokenPayload> {
           reject(new Error('Token missing required claims (oid, preferred_username/upn)'));
           return;
         }
-        if (payload.oid.length === 0 || email.length === 0 || email.length > 320) {
+        // Bound oid too (Entra object id is a GUID, ~36 chars). Token size is
+        // already capped upstream, but an explicit upper bound keeps an absurd
+        // value out of the DB key path regardless.
+        if (payload.oid.length === 0 || payload.oid.length > 100 || email.length === 0 || email.length > 320) {
           reject(new Error('Token contains invalid required claims'));
           return;
         }

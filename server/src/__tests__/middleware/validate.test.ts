@@ -111,14 +111,16 @@ describe('validate middleware', () => {
       expect(next).toHaveBeenCalledWith();
     });
 
-    it('should strip unknown fields from the body', () => {
+    it('should reject unknown fields in the body (.strict)', () => {
       const req = mockRequest({ ...validCreatePayload, hacker: 'drop table' });
       const res = mockResponse();
 
       validate(createExpenseSchema)(req as Request, res as Response, next);
 
-      expect(next).toHaveBeenCalledWith();
-      expect(req.body.hacker).toBeUndefined();
+      // .strict() rejects unknown keys outright rather than silently stripping
+      // them, so a stray/privileged field is a 400 and never reaches the handler.
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(400);
     });
   });
 

@@ -179,9 +179,9 @@ describe('updateExpenseSchema', () => {
     expect(updateExpenseSchema.safeParse({ description: 'bad\x1Bdesc' }).success).toBe(false);
   });
 
-  // Privileged/unknown fields are stripped, so they can never reach the model.
-  // A body of only unknown keys therefore fails the "at least one field" rule.
-  it('strips unknown/privileged fields (status, submitted_by, version)', () => {
+  // Privileged/unknown fields are rejected outright (.strict()), so they can
+  // never reach the model — even alongside otherwise-valid fields.
+  it('rejects unknown/privileged fields (status, submitted_by, version)', () => {
     const result = updateExpenseSchema.safeParse({
       title: 'Legit edit',
       status: 'APPROVED',
@@ -189,12 +189,7 @@ describe('updateExpenseSchema', () => {
       approved_by: 1,
       version: 99,
     });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toEqual({ title: 'Legit edit' });
-      expect(result.data).not.toHaveProperty('status');
-      expect(result.data).not.toHaveProperty('submitted_by');
-    }
+    expect(result.success).toBe(false);
   });
 
   it('rejects a body containing only unknown fields', () => {

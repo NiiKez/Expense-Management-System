@@ -66,11 +66,7 @@ export const getPendingApprovals = async (req: Request, res: Response, next: Nex
 
       const subordinateUsers = await userModel.findByEntraIds(directReports.map((report) => report.id));
 
-      await Promise.all(
-        subordinateUsers
-          .filter((user) => user.manager_id !== req.user!.id)
-          .map((user) => userModel.updateManager(user.id, req.user!.id)),
-      );
+      await userModel.reassignManagerForUsers(subordinateUsers, req.user!.id);
 
       const subordinateIds = subordinateUsers
         .map((user) => user.id)
@@ -167,8 +163,27 @@ export const approveExpense = async (req: Request, res: Response, next: NextFunc
 
     await notificationService.expenseDecision({ expense, actor: req.user!, decision: 'APPROVED' });
 
-    const updated = await expenseModel.findById(expenseId);
-    res.json({ success: true, data: updated });
+    // The approval is committed. Re-read for the freshest row, but never let a
+    // re-read failure (transient DB error) or a soft-delete race turn an already
+    // committed decision into a 500 / `data: null`. Fall back to the
+    // authoritative post-decision shape the stored procedure wrote.
+    const updated = await expenseModel.findById(expenseId).catch((err: unknown) => {
+      logger.warn('Approval committed but re-read failed', { err: summarizeHttpError(err), expenseId });
+      return null;
+    });
+    res.json({
+      success: true,
+      // updated_at is refreshed here because the stored procedure bumps it
+      // (ON UPDATE CURRENT_TIMESTAMP); without it the fallback would echo the
+      // stale pre-decision timestamp from the snapshot read above.
+      data: updated ?? {
+        ...expense,
+        status: Status.APPROVED,
+        approved_by: req.user!.id,
+        version: expense.version + 1,
+        updated_at: new Date(),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -240,8 +255,23 @@ export const rejectExpense = async (req: Request, res: Response, next: NextFunct
 
     await notificationService.expenseDecision({ expense, actor: req.user!, decision: 'REJECTED' });
 
-    const updated = await expenseModel.findById(expenseId);
-    res.json({ success: true, data: updated });
+    // See approveExpense: a committed rejection must survive a failed/raced
+    // re-read rather than surfacing as a 500 or `data: null`.
+    const updated = await expenseModel.findById(expenseId).catch((err: unknown) => {
+      logger.warn('Rejection committed but re-read failed', { err: summarizeHttpError(err), expenseId });
+      return null;
+    });
+    res.json({
+      success: true,
+      data: updated ?? {
+        ...expense,
+        status: Status.REJECTED,
+        approved_by: req.user!.id,
+        rejection_reason: trimmedReason,
+        version: expense.version + 1,
+        updated_at: new Date(),
+      },
+    });
   } catch (err) {
     next(err);
   }

@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import expressWinston from 'express-winston';
-import logger from './config/logger';
+import logger, { generateCorrelationId } from './config/logger';
 import { errorHandler } from './middleware/errorHandler';
 import { metricsMiddleware } from './middleware/metrics';
 import { forbidden, notFound } from './utils/errors';
@@ -19,8 +19,20 @@ const app = express();
 
 app.disable('x-powered-by');
 
-// Security headers
-app.use(helmet());
+// Security headers, tuned for a JSON API that also serves file downloads. The
+// API renders no HTML, so lock the CSP down to 'none' (defense-in-depth should a
+// response ever be rendered) and forbid framing (clickjacking). CORP is relaxed
+// to same-site so the SPA on a sibling subdomain can load API-served assets.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: 'same-site' },
+}));
 
 // Trust proxy hop count.
 // Why exact: 'true' trusts the entire X-Forwarded-For chain, letting any client
@@ -59,8 +71,27 @@ app.use(cors({
   credentials: allowedOrigins.length > 0,
 }));
 
-// Request logging
-app.use(expressWinston.logger({ winstonInstance: logger, meta: false, expressFormat: true }));
+// Request correlation. Honor an upstream X-Request-Id (gateway/load balancer)
+// when present and sane, otherwise mint one; echo it back so a client can quote
+// the id of a failing request. Runs before request logging so access logs carry it.
+app.use((req, res, next) => {
+  const incoming = req.header('x-request-id');
+  const id = incoming && incoming.length <= 200 ? incoming : generateCorrelationId();
+  req.id = id;
+  res.setHeader('x-request-id', id);
+  next();
+});
+
+// Request logging — correlate each access log line with the request id, without
+// dumping request/response headers or bodies into the logs.
+app.use(expressWinston.logger({
+  winstonInstance: logger,
+  meta: true,
+  expressFormat: true,
+  requestWhitelist: [],
+  responseWhitelist: [],
+  dynamicMeta: (req) => ({ requestId: req.id }),
+}));
 
 // Body parsing
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '100kb' }));
@@ -91,6 +122,12 @@ const healthLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: true, xForwardedForHeader: true },
+  // Never rate-limit liveness: a 429 to /live reads as a liveness failure and
+  // makes the orchestrator kill an otherwise-healthy instance — the crash-loop
+  // amplification the liveness/readiness split exists to prevent. The endpoint
+  // is dependency-free and cheap, so leaving it unthrottled is safe. Readiness
+  // (DB-backed) and the legacy aggregate stay limited.
+  skip: (req) => req.path === '/live',
 });
 
 // Prometheus metrics are served on a separate internal listener — see server.ts.

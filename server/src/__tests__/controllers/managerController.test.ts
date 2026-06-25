@@ -60,7 +60,7 @@ describe('managerController', () => {
         updated_at: new Date(),
       },
     ]);
-    mockedUserModel.updateManager.mockResolvedValue(null);
+    mockedUserModel.reassignManagerForUsers.mockResolvedValue(undefined);
 
     const req = mockRequest({
       headers: { authorization: 'Bearer token-123' },
@@ -71,7 +71,10 @@ describe('managerController', () => {
 
     expect(mockedGraphApiService.getDirectReports).toHaveBeenCalledWith(2, 'token-123', { forceRefresh: false });
     expect(mockedUserModel.findByEntraIds).toHaveBeenCalledWith(['entra-employee']);
-    expect(mockedUserModel.updateManager).toHaveBeenCalledWith(7, 2);
+    expect(mockedUserModel.reassignManagerForUsers).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 7, manager_id: null })],
+      2,
+    );
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [

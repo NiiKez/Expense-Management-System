@@ -1,6 +1,6 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import pool from '../config/db';
-import { Expense, Status } from '../types';
+import { Expense, Receipt, Status } from '../types';
 import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, EXPORT_MAX_ROWS } from '../utils/constants';
 import { resolveSort } from '../utils/sorting';
 
@@ -26,6 +26,7 @@ const ADMIN_EXPENSE_SORTS: Record<string, string> = {
 };
 
 interface ExpenseRow extends RowDataPacket, Expense {}
+interface ReceiptRow extends RowDataPacket, Receipt {}
 interface StoredProcedureResultRow extends RowDataPacket {
   result_code: 'SUCCESS' | 'NOT_FOUND' | 'NOT_PENDING' | 'VERSION_CONFLICT' | 'SAME_STATUS';
 }
@@ -49,34 +50,94 @@ function escapeLike(input: string): string {
 }
 
 export const expenseModel = {
-  async create(data: {
-    submitted_by: number;
-    title: string;
-    description?: string | null;
-    amount: number;
-    currency: string;
-    category: string;
-    expense_date: string;
-  }): Promise<Expense> {
-    const [result] = await pool.execute<ResultSetHeader>(
-      `INSERT INTO expenses (submitted_by, title, description, amount, currency, category, expense_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        data.submitted_by,
-        data.title,
-        data.description || null,
-        data.amount,
-        data.currency,
-        data.category,
-        data.expense_date,
-      ],
-    );
+  // Submit an expense atomically: the expense row, its optional receipt, and the
+  // immutable SUBMITTED audit entry all commit together or not at all. The old
+  // flow inserted these on three separate pooled connections, so a failure after
+  // the expense committed could leave a submitted expense with no audit row (an
+  // incomplete, non-compliant audit trail) or an orphaned receipt.
+  async createSubmission(params: {
+    expense: {
+      submitted_by: number;
+      title: string;
+      description?: string | null;
+      amount: number;
+      currency: string;
+      category: string;
+      expense_date: string;
+    };
+    receipt?: {
+      file_name: string;
+      file_path: string;
+      mime_type: string;
+      file_size: number;
+    } | null;
+    ipAddress: string | null;
+  }): Promise<{ expense: Expense; receipt: Receipt | null }> {
+    const { expense: data, receipt: receiptData, ipAddress } = params;
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const expense = await this.findById(result.insertId);
-    if (!expense) {
-      throw new Error(`Failed to load expense after insert (id=${result.insertId})`);
+      const [insertResult] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO expenses (submitted_by, title, description, amount, currency, category, expense_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          data.submitted_by,
+          data.title,
+          data.description ?? null,
+          data.amount,
+          data.currency,
+          data.category,
+          data.expense_date,
+        ],
+      );
+      const expenseId = insertResult.insertId;
+
+      let receipt: Receipt | null = null;
+      if (receiptData) {
+        const [receiptResult] = await conn.execute<ResultSetHeader>(
+          `INSERT INTO receipts (expense_id, file_name, file_path, mime_type, file_size)
+           VALUES (?, ?, ?, ?, ?)`,
+          [expenseId, receiptData.file_name, receiptData.file_path, receiptData.mime_type, receiptData.file_size],
+        );
+        const [receiptRows] = await conn.execute<ReceiptRow[]>(
+          'SELECT * FROM receipts WHERE id = ?',
+          [receiptResult.insertId],
+        );
+        receipt = receiptRows[0] || null;
+      }
+
+      await conn.execute<ResultSetHeader>(
+        `INSERT INTO audit_logs (expense_id, action, performed_by, old_status, new_status, details, ip_address)
+         VALUES (?, 'SUBMITTED', ?, NULL, 'PENDING', NULL, ?)`,
+        [expenseId, data.submitted_by, ipAddress],
+      );
+
+      // Re-read on the same connection before commit so the returned row reflects
+      // exactly what this transaction wrote (mirrors resubmit()).
+      const [expenseRows] = await conn.execute<ExpenseRow[]>(
+        'SELECT * FROM expenses WHERE id = ? AND deleted_at IS NULL',
+        [expenseId],
+      );
+
+      // Validate the re-read *before* committing: a throw here rolls back the
+      // still-open transaction cleanly, instead of throwing after commit and
+      // rolling back an already-durable write (which would 500 on data that
+      // was actually persisted).
+      const expense = expenseRows[0];
+      if (!expense) {
+        throw new Error(`Failed to load expense after insert (id=${expenseId})`);
+      }
+
+      await conn.commit();
+
+      return { expense, receipt };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
-    return expense;
   },
 
   async findById(id: number): Promise<Expense | null> {

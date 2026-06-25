@@ -189,6 +189,10 @@ declare global {
         display_name: string;
         stubAuth?: boolean;
       };
+      // Per-request correlation id, set by the request-id middleware and echoed
+      // back as the X-Request-Id response header so access logs, error logs, and
+      // a client-reported id all point at the same request.
+      id?: string;
     }
   }
 }

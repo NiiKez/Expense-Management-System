@@ -43,17 +43,15 @@ export const notificationModel = {
       where += ' AND is_read = 0';
     }
 
+    // One scan for both counts instead of two separate COUNT round-trips.
+    // SUM(is_read = 0) yields the unread count; under unreadOnly the WHERE already
+    // filters to unread rows, so total and unread coincide (as before).
     const [countRows] = await pool.execute<RowDataPacket[]>(
-      `SELECT COUNT(*) AS total FROM notifications ${where}`,
+      `SELECT COUNT(*) AS total, COALESCE(SUM(is_read = 0), 0) AS unread FROM notifications ${where}`,
       params,
     );
-    const total = (countRows[0] as { total: number }).total;
-
-    const [unreadRows] = await pool.execute<RowDataPacket[]>(
-      'SELECT COUNT(*) AS unread FROM notifications WHERE user_id = ? AND is_read = 0',
-      [userId],
-    );
-    const unread = (unreadRows[0] as { unread: number }).unread;
+    const total = Number((countRows[0] as { total: number }).total);
+    const unread = Number((countRows[0] as { unread: number | string }).unread);
 
     const [rows] = await pool.query<NotificationRow[]>(
       `SELECT * FROM notifications ${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
