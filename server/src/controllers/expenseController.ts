@@ -58,37 +58,32 @@ export const createExpense = async (req: Request, res: Response, next: NextFunct
     // Magic-byte verification already runs in validateReceiptUpload middleware,
     // which deletes the file on failure. No need to re-check here.
 
-    const expense = await expenseModel.create({
-      submitted_by: userId,
-      title,
-      description: description ?? null,
-      amount,
-      currency,
-      category,
-      expense_date,
-    });
+    const receiptInput = req.file
+      ? {
+          file_name: sanitizeReceiptDownloadName(req.file.originalname).slice(0, 255),
+          file_path: req.file.path,
+          mime_type: req.file.mimetype,
+          file_size: req.file.size,
+        }
+      : null;
 
-    // Save receipt if a file was uploaded
-    let receipt = null;
-    if (req.file) {
-      receipt = await receiptModel.create({
-        expense_id: expense.id,
-        file_name: sanitizeReceiptDownloadName(req.file.originalname).slice(0, 255),
-        file_path: req.file.path,
-        mime_type: req.file.mimetype,
-        file_size: req.file.size,
-      });
-      receiptPersisted = true;
-    }
-
-    await auditLogModel.create({
-      expense_id: expense.id,
-      action: AuditAction.SUBMITTED,
-      performed_by: userId,
-      old_status: null,
-      new_status: Status.PENDING,
-      ip_address: req.ip || null,
+    // Expense row + receipt + SUBMITTED audit entry commit atomically.
+    const { expense, receipt } = await expenseModel.createSubmission({
+      expense: {
+        submitted_by: userId,
+        title,
+        description: description ?? null,
+        amount,
+        currency,
+        category,
+        expense_date,
+      },
+      receipt: receiptInput,
+      ipAddress: req.ip || null,
     });
+    // The receipt row is committed; on a later failure the file is already owned
+    // by a persisted expense, so it must NOT be cleaned up.
+    receiptPersisted = req.file != null;
 
     expenseSubmissionsTotal.inc();
 

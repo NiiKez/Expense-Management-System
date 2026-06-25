@@ -78,11 +78,7 @@ export const getManagerEmployees = async (req: Request, res: Response, next: Nex
       const matchedUsers = await userModel.findByEntraIds(directReports.map((report) => report.id));
       const matchedByEntraId = new Map(matchedUsers.map((user) => [user.entra_id, user]));
 
-      await Promise.all(
-        matchedUsers
-          .filter((user) => user.manager_id !== req.user!.id)
-          .map((user) => userModel.updateManager(user.id, req.user!.id)),
-      );
+      await userModel.reassignManagerForUsers(matchedUsers, req.user!.id);
 
       const data: ManagerEmployeeRecord[] = directReports.map((report) => {
         const appUser = matchedByEntraId.get(report.id);

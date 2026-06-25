@@ -107,67 +107,65 @@ describe('expenseController', () => {
 
     it('should create an expense and return 201', async () => {
       const expense = mockExpense();
-      const auditLog = mockAuditLog();
-      mockedExpenseModel.create.mockResolvedValue(expense);
-      mockedAuditLogModel.create.mockResolvedValue(auditLog);
+      mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt: null });
 
       const req = mockRequest({ body: validBody });
       const res = mockResponse();
 
       await createExpense(req as Request, res as Response, next);
 
-      expect(mockedExpenseModel.create).toHaveBeenCalledWith({
-        submitted_by: 1,
-        title: 'Flight to NYC',
-        description: 'Business trip',
-        amount: 450.00,
-        currency: 'USD',
-        category: Category.TRAVEL,
-        expense_date: '2026-03-01',
+      expect(mockedExpenseModel.createSubmission).toHaveBeenCalledWith({
+        expense: {
+          submitted_by: 1,
+          title: 'Flight to NYC',
+          description: 'Business trip',
+          amount: 450.00,
+          currency: 'USD',
+          category: Category.TRAVEL,
+          expense_date: '2026-03-01',
+        },
+        receipt: null,
+        ipAddress: '127.0.0.1',
       });
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith({ success: true, data: { ...expense, receipts: [] } });
     });
 
-    it('should create a SUBMITTED audit log entry', async () => {
+    it('should submit the expense atomically with audit context (ip address)', async () => {
       const expense = mockExpense();
-      mockedExpenseModel.create.mockResolvedValue(expense);
-      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog());
+      mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt: null });
 
       const req = mockRequest({ body: validBody });
       const res = mockResponse();
 
       await createExpense(req as Request, res as Response, next);
 
-      expect(mockedAuditLogModel.create).toHaveBeenCalledWith({
-        expense_id: expense.id,
-        action: AuditAction.SUBMITTED,
-        performed_by: 1,
-        old_status: null,
-        new_status: Status.PENDING,
-        ip_address: '127.0.0.1',
-      });
+      // The SUBMITTED audit row is written inside createSubmission's transaction;
+      // the controller's job is to pass the requester IP through to it.
+      expect(mockedExpenseModel.createSubmission).toHaveBeenCalledWith(
+        expect.objectContaining({ ipAddress: '127.0.0.1' }),
+      );
+      expect(mockedAuditLogModel.create).not.toHaveBeenCalled();
     });
 
     it('should set description to null when not provided', async () => {
       const bodyWithoutDesc = { ...validBody, description: undefined };
       const expense = mockExpense({ description: null });
-      mockedExpenseModel.create.mockResolvedValue(expense);
-      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog());
+      mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt: null });
 
       const req = mockRequest({ body: bodyWithoutDesc });
       const res = mockResponse();
 
       await createExpense(req as Request, res as Response, next);
 
-      expect(mockedExpenseModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ description: null }),
+      expect(mockedExpenseModel.createSubmission).toHaveBeenCalledWith(
+        expect.objectContaining({ expense: expect.objectContaining({ description: null }) }),
       );
     });
 
     it('should call next(err) when model throws', async () => {
       const dbError = new Error('DB connection failed');
-      mockedExpenseModel.create.mockRejectedValue(dbError);
+      mockedExpenseModel.createSubmission.mockRejectedValue(dbError);
 
       const req = mockRequest({ body: validBody });
       const res = mockResponse();

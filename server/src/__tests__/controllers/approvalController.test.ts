@@ -83,7 +83,7 @@ describe('approvalController.getPendingApprovals', () => {
         updated_at: new Date(),
       },
     ]);
-    mockedUserModel.updateManager.mockResolvedValue(null);
+    mockedUserModel.reassignManagerForUsers.mockResolvedValue(undefined);
     mockedExpenseModel.findPendingBySubmitterIds.mockResolvedValue({
       data: [mockExpense()],
       total: 1,
@@ -99,7 +99,10 @@ describe('approvalController.getPendingApprovals', () => {
 
     expect(mockedGraphApiService.getDirectReports).toHaveBeenCalledWith(2, 'token-123');
     expect(mockedUserModel.findByEntraIds).toHaveBeenCalledWith(['entra-employee']);
-    expect(mockedUserModel.updateManager).toHaveBeenCalledWith(7, 2);
+    expect(mockedUserModel.reassignManagerForUsers).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 7, manager_id: null })],
+      2,
+    );
     expect(mockedExpenseModel.findPendingBySubmitterIds).toHaveBeenCalledWith([7], { page: 1, pageSize: 20 });
     expect(res.json).toHaveBeenCalledWith({
       success: true,
