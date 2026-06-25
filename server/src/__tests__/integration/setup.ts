@@ -11,6 +11,7 @@
 
 import pool from '../../config/db';
 import { Role } from '../../types';
+import { assertDisposableTestDatabase } from './guardTestDatabase';
 
 // ── Auth bypass ──────────────────────────────────────────────
 // We mock the `authenticate` middleware so it injects req.user
@@ -66,6 +67,7 @@ export const ADMIN_USER = mockUserPayload({
  * Called once before each test suite.
  */
 export async function seedTestUsers(): Promise<void> {
+  assertDisposableTestDatabase();
   await pool.execute(
     `INSERT INTO users (id, entra_id, email, display_name, role, is_active)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -104,6 +106,7 @@ export async function linkManagerReport(reportUserId: number, managerUserId: num
  * Users are left in place since they're re-used across tests.
  */
 export async function cleanTestData(): Promise<void> {
+  assertDisposableTestDatabase();
   // audit_logs is append-only: a BEFORE DELETE trigger raises SQLSTATE 45000, so a
   // plain DELETE fails once any rows exist. TRUNCATE does not fire row-level triggers
   // and also resets AUTO_INCREMENT. It must run before expenses because
@@ -124,6 +127,7 @@ export async function cleanTestData(): Promise<void> {
  * Tear down: clean everything and end the pool.
  */
 export async function teardownTestDb(): Promise<void> {
+  assertDisposableTestDatabase();
   // pool.end() MUST run even if a cleanup statement throws — otherwise the
   // connection pool leaks and (now that --forceExit is gone) the run hangs.
   try {

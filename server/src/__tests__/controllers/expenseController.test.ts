@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { expenseModel } from '../../models/expense';
 import { auditLogModel } from '../../models/auditLog';
-import { createExpense, getExpenses, getExpenseById, updateExpense, deleteExpense } from '../../controllers/expenseController';
+import { createExpense, getExpenses, getExpenseById, updateExpense, deleteExpense, resubmitExpense, exportMyExpenses } from '../../controllers/expenseController';
 import { Status, AuditAction, Category, Role, Expense, AuditLog } from '../../types';
 import { AppError } from '../../utils/errors';
 
@@ -78,6 +78,8 @@ const mockResponse = (): Partial<Response> => {
   const res: Partial<Response> = {};
   res.status = jest.fn().mockReturnValue(res);
   res.json = jest.fn().mockReturnValue(res);
+  res.setHeader = jest.fn().mockReturnValue(res as Response);
+  res.send = jest.fn().mockReturnValue(res);
   return res;
 };
 
@@ -620,6 +622,301 @@ describe('expenseController', () => {
       await deleteExpense(req as Request, res as Response, next);
 
       expect(next).toHaveBeenCalledWith(dbError);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // resubmitExpense  (REJECTED → PENDING)
+  // ────────────────────────────────────────────────────────────
+
+  describe('resubmitExpense', () => {
+    const resubmitBody = { title: 'Corrected title' };
+
+    it('should resubmit a REJECTED expense: forward (id, body, version) and return the updated expense', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      const updatedExpense = mockExpense({ id: 10, status: Status.PENDING, version: 4, title: 'Corrected title' });
+
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({
+        result: 'SUCCESS',
+        expense: updatedExpense,
+        appliedFields: ['title'],
+      });
+      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog({ action: AuditAction.RESUBMITTED }));
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      // Optimistic-lock version flows from the freshly-read row into resubmit().
+      expect(mockedExpenseModel.resubmit).toHaveBeenCalledWith(10, resubmitBody, 3);
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: updatedExpense });
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('should record a RESUBMITTED audit entry with the REJECTED→PENDING transition', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      const updatedExpense = mockExpense({ status: Status.PENDING, version: 4 });
+
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({
+        result: 'SUCCESS',
+        expense: updatedExpense,
+        appliedFields: ['title', 'amount'],
+      });
+      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog({ action: AuditAction.RESUBMITTED }));
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      expect(mockedAuditLogModel.create).toHaveBeenCalledWith({
+        expense_id: 10,
+        action: AuditAction.RESUBMITTED,
+        performed_by: 1,
+        old_status: Status.REJECTED,
+        new_status: Status.PENDING,
+        details: { updated_fields: ['title', 'amount'] },
+        ip_address: '127.0.0.1',
+      });
+    });
+
+    it('should record null audit details when no fields were changed on resubmit', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      const updatedExpense = mockExpense({ status: Status.PENDING, version: 4 });
+
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({
+        result: 'SUCCESS',
+        expense: updatedExpense,
+        appliedFields: [],
+      });
+      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog({ action: AuditAction.RESUBMITTED }));
+
+      const req = mockRequest({ params: { id: '10' }, body: {} });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      expect(mockedAuditLogModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.RESUBMITTED, details: null }),
+      );
+    });
+
+    it('should return 400 for a non-numeric ID', async () => {
+      const req = mockRequest({ params: { id: 'abc' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(400);
+      expect(error.message).toBe('Invalid expense ID');
+      expect(mockedExpenseModel.resubmit).not.toHaveBeenCalled();
+    });
+
+    it('should return 404 when the expense does not exist', async () => {
+      mockedExpenseModel.findById.mockResolvedValue(null);
+
+      const req = mockRequest({ params: { id: '999' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(404);
+      expect(error.message).toBe('Expense not found');
+      expect(mockedExpenseModel.resubmit).not.toHaveBeenCalled();
+    });
+
+    it('should return 403 when a user tries to resubmit another user\'s expense', async () => {
+      const expense = mockExpense({ submitted_by: 99, status: Status.REJECTED });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(403);
+      expect(error.message).toBe('You can only resubmit your own expenses');
+      expect(mockedExpenseModel.resubmit).not.toHaveBeenCalled();
+    });
+
+    it('should return 409 when the expense is not REJECTED', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.PENDING });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(409);
+      expect(error.message).toBe('Only rejected expenses can be resubmitted');
+      expect(mockedExpenseModel.resubmit).not.toHaveBeenCalled();
+    });
+
+    it('should return 409 on optimistic-version conflict (resubmit → CONFLICT)', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({ result: 'CONFLICT', expense: null, appliedFields: [] });
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(409);
+      expect(error.message).toContain('modified by another request');
+      expect(mockedAuditLogModel.create).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('should return 404 when the row vanished between read and resubmit (NOT_FOUND)', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({ result: 'NOT_FOUND', expense: null, appliedFields: [] });
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(404);
+      expect(error.message).toBe('Expense not found');
+      expect(mockedAuditLogModel.create).not.toHaveBeenCalled();
+    });
+
+    it('should return 409 when status changed under the read (NOT_REJECTED race)', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({ result: 'NOT_REJECTED', expense: null, appliedFields: [] });
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(409);
+      expect(error.message).toBe('Only rejected expenses can be resubmitted');
+      expect(mockedAuditLogModel.create).not.toHaveBeenCalled();
+    });
+
+    it('should call next(err) when the model throws', async () => {
+      const dbError = new Error('DB error');
+      mockedExpenseModel.findById.mockRejectedValue(dbError);
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      expect(next).toHaveBeenCalledWith(dbError);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // exportMyExpenses  (CSV export, scoped to the caller)
+  // ────────────────────────────────────────────────────────────
+
+  describe('exportMyExpenses', () => {
+    const CSV_HEADER = 'ID,Title,Category,Amount,Currency,Date,Status,Filed';
+    const UTF8_BOM = '﻿';
+
+    it('should scope the export to the requesting user\'s id', async () => {
+      mockedExpenseModel.findByUserIdForExport.mockResolvedValue({ data: [], capped: false });
+
+      const req = mockRequest({ user: mockUser({ id: 7 }), query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      expect(mockedExpenseModel.findByUserIdForExport).toHaveBeenCalledTimes(1);
+      expect(mockedExpenseModel.findByUserIdForExport.mock.calls[0][0]).toBe(7);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('should set CSV content-type and an attachment Content-Disposition header', async () => {
+      const expense = mockExpense({ id: 10, title: 'Lunch', status: Status.APPROVED });
+      mockedExpenseModel.findByUserIdForExport.mockResolvedValue({ data: [expense], capped: false });
+
+      const req = mockRequest({ query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="my-expenses.csv"',
+      );
+    });
+
+    it('should emit a UTF-8 BOM + header row, then one CRLF-terminated row per expense', async () => {
+      const expense = mockExpense({ id: 42, title: 'Hotel', category: Category.TRAVEL, status: Status.APPROVED });
+      mockedExpenseModel.findByUserIdForExport.mockResolvedValue({ data: [expense], capped: false });
+
+      const req = mockRequest({ query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      const body = (res.send as jest.Mock).mock.calls[0][0] as string;
+      expect(body.startsWith(UTF8_BOM)).toBe(true);
+      expect(body).toContain(CSV_HEADER);
+      // header row + one data row + trailing CRLF
+      expect(body.split('\r\n').filter((l) => l.length > 0)).toHaveLength(2);
+      expect(body).toContain('42,Hotel,TRAVEL,');
+    });
+
+    it('should neutralize spreadsheet-injection payloads via the injection-safe csv util', async () => {
+      // A title beginning with "=" is a live formula in Excel/Sheets; the csv util
+      // must prefix it with an apostrophe so it is treated as literal text.
+      const expense = mockExpense({ id: 1, title: '=1+1', status: Status.APPROVED });
+      mockedExpenseModel.findByUserIdForExport.mockResolvedValue({ data: [expense], capped: false });
+
+      const req = mockRequest({ query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      const body = (res.send as jest.Mock).mock.calls[0][0] as string;
+      expect(body).toContain("'=1+1");
+      expect(body).not.toMatch(/,=1\+1,/);
+    });
+
+    it('should still return a valid CSV (header row only) when there are no expenses', async () => {
+      mockedExpenseModel.findByUserIdForExport.mockResolvedValue({ data: [], capped: false });
+
+      const req = mockRequest({ query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      const body = (res.send as jest.Mock).mock.calls[0][0] as string;
+      expect(body).toBe(`${UTF8_BOM}${CSV_HEADER}\r\n`);
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+    });
+
+    it('should call next(err) when the model throws', async () => {
+      const dbError = new Error('DB error');
+      mockedExpenseModel.findByUserIdForExport.mockRejectedValue(dbError);
+
+      const req = mockRequest({ query: {} });
+      const res = mockResponse();
+
+      await exportMyExpenses(req as Request, res as Response, next);
+
+      expect(next).toHaveBeenCalledWith(dbError);
+      expect(res.send).not.toHaveBeenCalled();
     });
   });
 });

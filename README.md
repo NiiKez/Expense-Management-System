@@ -225,6 +225,7 @@ Integration tests need MySQL — easiest path is the dedicated compose, which ru
 $env:MYSQL_TEST_ROOT_PASSWORD="dev"; $env:MYSQL_TEST_PASSWORD="dev"
 docker compose -f docker/docker-compose.test.yml up --build --exit-code-from test-runner
 ```
+The integration setup truncates and reseeds its tables, so it refuses to run unless `DB_NAME` identifies a disposable test database (the name must contain `test`) — a safeguard against pointing the destructive helpers at a real database. CI uses `expense_management_test`.
 
 ### Client unit (Jest + React Testing Library, in `client/`)
 ```powershell

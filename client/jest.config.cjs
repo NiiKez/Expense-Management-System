@@ -37,6 +37,23 @@ const config = {
           // via "vite/client" in tsconfig.test.json, so we deliberately do NOT suppress
           // 2339 ("property does not exist") — that guard catches real typos in tests.
           ignoreCodes: [1343],
+          // GOTCHA — coverage of files NO test imports. `ignoreCodes` is only honoured on
+          // ts-jest's SYNC path (`process`), which is what jest-runtime uses to `require`
+          // a file a test imports: it keeps only the emitted `.code` and discards
+          // diagnostics, so the 1343 above is moot there. But coverage for *uncovered*
+          // collectCoverageFrom files is gathered in a worker via @jest/transform's
+          // `transformSourceAsync`, which routes to ts-jest's ASYNC `processAsync` — and
+          // that path RE-THROWS every returned diagnostic WITHOUT consulting `ignoreCodes`.
+          // So a Vite-idiom file no test imports (e.g. services/auth.ts, whose only
+          // executable line is an `import.meta.env.PROD` guard) throws 1343, Jest prints
+          // "Failed to collect coverage from …" and silently DROPS it from the report —
+          // letting it slip under the ./src/services/ 90% gate below. `exclude` tells
+          // ts-jest to skip type diagnostics for these import.meta boundary files so the
+          // coverage worker can instrument them; the importMetaTransformer still rewrites
+          // import.meta→process.env at emit, and `tsc -b` still type-checks them at build.
+          // NB: any NEW source file that reads `import.meta` must be added here, or its
+          // coverage will be silently dropped the moment no test imports it.
+          exclude: ['**/src/services/auth.ts', '**/src/services/env.ts'],
         },
       },
     ],

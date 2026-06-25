@@ -22,6 +22,9 @@ const config: Config = {
   // Under the Docker runner a cold connect can exceed Jest's 5s default and flake;
   // give DB-backed tests a generous ceiling.
   testTimeout: 30_000,
+  // Fail the whole run before any pool is opened if DB_NAME is not a disposable
+  // test database — the destructive setup helpers would otherwise wipe it.
+  globalSetup: '<rootDir>/src/__tests__/integration/globalSetup.ts',
 };
 
 export default config;
