@@ -1,0 +1,65 @@
+import {
+  assertDisposableTestDatabase,
+  isDisposableTestDbName,
+  resolveTestDbName,
+} from '../integration/guardTestDatabase';
+
+describe('integration-test disposable-database guard', () => {
+  describe('resolveTestDbName', () => {
+    it('uses DB_NAME when set', () => {
+      expect(resolveTestDbName({ DB_NAME: 'expense_management_test' } as NodeJS.ProcessEnv)).toBe(
+        'expense_management_test',
+      );
+    });
+
+    it('falls back to the dev default when DB_NAME is unset (so the default is refused)', () => {
+      expect(resolveTestDbName({} as NodeJS.ProcessEnv)).toBe('expense_management');
+    });
+
+    it('treats a blank/whitespace DB_NAME as unset', () => {
+      expect(resolveTestDbName({ DB_NAME: '   ' } as NodeJS.ProcessEnv)).toBe('expense_management');
+    });
+  });
+
+  describe('isDisposableTestDbName', () => {
+    it.each(['expense_management_test', 'test_db', 'TEST', 'ci_TEST_42', 'my_test_database'])(
+      'accepts %s (contains "test")',
+      (name) => {
+        expect(isDisposableTestDbName(name)).toBe(true);
+      },
+    );
+
+    it.each(['expense_management', 'production', 'expense_app', 'prod_db', ''])(
+      'rejects %s (no "test")',
+      (name) => {
+        expect(isDisposableTestDbName(name)).toBe(false);
+      },
+    );
+  });
+
+  describe('assertDisposableTestDatabase', () => {
+    it('passes for the CI test database name', () => {
+      expect(() =>
+        assertDisposableTestDatabase({ DB_NAME: 'expense_management_test' } as NodeJS.ProcessEnv),
+      ).not.toThrow();
+    });
+
+    it('throws for the dev database name', () => {
+      expect(() =>
+        assertDisposableTestDatabase({ DB_NAME: 'expense_management' } as NodeJS.ProcessEnv),
+      ).toThrow(/Refusing to run destructive integration-test helpers against database "expense_management"/);
+    });
+
+    it('throws when DB_NAME is unset (defaults to the dev DB)', () => {
+      expect(() => assertDisposableTestDatabase({} as NodeJS.ProcessEnv)).toThrow(
+        /expense_management/,
+      );
+    });
+
+    it('error message points operators at a fix', () => {
+      expect(() =>
+        assertDisposableTestDatabase({ DB_NAME: 'prod' } as NodeJS.ProcessEnv),
+      ).toThrow(/docker-compose\.test\.yml/);
+    });
+  });
+});

@@ -27,18 +27,22 @@ const config: Config = {
   ],
   // Ratchet set a few points below current unit-test coverage so it can only go up.
   // NB: Jest's "global" floor applies only to files NOT matched by a path-specific
-  // key below — so once utils/middleware/services are carved out, "global" measures
-  // the remaining controllers/models/routes/config/app, which are largely covered by
-  // the integration suite (run separately) rather than unit tests. That residual sits
-  // ~33%. The per-directory floors lock in the high coverage of the security/money-
-  // handling code so a regression there fails CI immediately. Raise these over time.
-  // Last calibrated against actual: residual-global ~33%, utils ~89%, middleware ~75%,
-  // services ~70% (whole-suite coverage is ~49%).
+  // key below. With controllers now carved out into their own floor, "global"
+  // measures the remaining models/routes/config/app layer, which is exercised by the
+  // integration suite (run separately) rather than unit tests and so sits low (~20%).
+  // The per-directory floors lock in the high unit coverage of the security/money-
+  // handling code (controllers, middleware, services, utils) so a regression there
+  // fails CI immediately — a fully-untested file in one of those dirs can no longer
+  // hide behind well-covered siblings. Raise these over time.
+  // Last calibrated against actual: controllers ~96/83/90/96, utils ~98/93/100/98,
+  // middleware ~87/83/87/88, services ~89/81/89/90, residual-global ~18% (whole-suite
+  // unit coverage is ~72%).
   coverageThreshold: {
-    global: { statements: 30, branches: 27, functions: 31, lines: 29 },
-    './src/utils/': { statements: 87, branches: 80, functions: 95, lines: 87 },
-    './src/middleware/': { statements: 72, branches: 71, functions: 66, lines: 72 },
-    './src/services/': { statements: 68, branches: 50, functions: 54, lines: 68 },
+    global: { statements: 16, branches: 10, functions: 13, lines: 17 },
+    './src/controllers/': { statements: 90, branches: 78, functions: 84, lines: 90 },
+    './src/utils/': { statements: 94, branches: 89, functions: 98, lines: 94 },
+    './src/middleware/': { statements: 83, branches: 78, functions: 82, lines: 83 },
+    './src/services/': { statements: 84, branches: 75, functions: 84, lines: 85 },
   },
 };
 
