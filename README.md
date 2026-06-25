@@ -7,7 +7,7 @@ A full-stack expense management system: employees submit expenses, managers appr
 - **Database** — MySQL with optimistic concurrency on `expenses.version`, append-only `audit_logs`, soft delete on expenses.
 - **Observability** — Prometheus + Grafana + Loki + Promtail, all wired in Docker Compose.
 - **Tests** — Jest (server unit + integration against a real MySQL container), a lighter Jest + React Testing Library suite on the client, and Playwright e2e against a stub-auth dev server.
-- **CI/CD** — GitHub Actions: lint → unit → build → (integration ‖ e2e), with client lint/test/build in parallel, then docker build → push to GHCR on `main`.
+- **CI/CD** — GitHub Actions: lint → unit → build → (integration ‖ e2e), with client lint/test/build in parallel, then docker build → push to GHCR on `main`. A separate security workflow adds CodeQL, Trivy, gitleaks, SBOM, and OpenSSF Scorecard scanning.
 
 ## Repository Layout
 
@@ -281,6 +281,16 @@ client-tests ──────────────────────�
 - E2E browsers are cached; the Playwright HTML report and traces upload as artifacts on failure (14-day retention).
 - Coverage from server unit tests uploads as an artifact (7 days).
 - `docker-build` builds `expense-management-server` (no push). `docker-push` runs only on a push to `main` and publishes `ghcr.io/${owner}/expense-management-server:${sha}`. The script also contains a release-tag branch (`:latest` + the git tag) that is currently unreachable, since the workflow has no tag trigger and `docker-push` is gated to `main`.
+
+### Security scanning
+
+`.github/workflows/security.yml` runs on push, pull requests, and a weekly schedule, centralising findings in the GitHub **code-scanning** tab via SARIF:
+
+- **CodeQL** SAST over the TypeScript code and the workflow files themselves (`actions`), with the `security-extended` query suite.
+- **Trivy** — image CVEs (the image is built once and shared), dependency CVEs/licenses (`fs`), and Dockerfile/compose misconfiguration (`config`).
+- **gitleaks** secret scanning — full history on push/schedule, PR diff on pull requests — with a narrow `.gitleaks.toml` allowlist for example env files and obviously-fake test fixtures.
+- **hadolint** Dockerfile linting, **dependency-review** gating newly-introduced vulnerable deps on PRs, per-workspace **npm audit**, **CycloneDX SBOMs** (source + image), and an **OpenSSF Scorecard** posture rating.
+- Deterministic checks (secrets, CodeQL, dependency-review, Dockerfile lint) hard-fail; CVE/posture scans are advisory, so a newly-disclosed CVE against an unchanged dependency surfaces in the Security tab without blocking unrelated PRs. Every `uses:` is SHA-pinned and jobs default to `contents: read`.
 
 ## Project Conventions
 

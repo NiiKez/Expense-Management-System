@@ -1,0 +1,27 @@
+# gitleaks configuration — Expense Management System
+#
+# Extends the upstream default ruleset and adds a small, deliberately narrow
+# allowlist for known-safe fixtures. Allowlists use AND conditions so a real
+# secret cannot slip through just because it lives in a test file.
+
+title = "Expense Management System gitleaks config"
+
+[extend]
+useDefault = true
+
+# Example environment files ship intentional placeholder values (see
+# server/.env.example, client/.env.example). The real server/.env is gitignored
+# and never committed, so it is out of scope for history scans regardless.
+[[allowlists]]
+description = "Example environment files contain placeholders only"
+paths = ['''(^|/)[^/]*\.example$''']
+
+# Dummy JWTs used as unit-test fixtures (canonical jwt.io sample header/payload
+# with obviously-fake signatures). Requires BOTH the test-file path AND the
+# fake-signature pattern, so a genuine token accidentally committed to a test is
+# still reported.
+[[allowlists]]
+description = "Fake JWT fixtures in unit tests"
+condition = "AND"
+paths = ['''.*\.test\.ts$''']
+regexes = ['''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.(dumm-signature|sig-part)[A-Za-z0-9_-]*''']
