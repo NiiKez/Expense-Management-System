@@ -29,8 +29,9 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  NODE_VERSION: '20'
+# NB: no top-level `env`/`defaults` and no workflow-level write permissions —
+# the OpenSSF Scorecard publish step (publish_results) rejects workflows that
+# carry them. NODE_VERSION therefore lives at job level on the only job using it.
 
 jobs:
   # ─────────────────────────────────────────────────────────────
@@ -328,6 +329,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    env:
+      NODE_VERSION: '20'
     strategy:
       fail-fast: false
       matrix:
