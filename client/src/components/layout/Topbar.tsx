@@ -16,6 +16,7 @@ import {
 import MobileNav from './MobileNav'
 import ThemeToggle from './ThemeToggle'
 import NotificationBell from './NotificationBell'
+import { isDemoSession } from '@/services/demoAuth'
 
 interface TopbarProps {
   title?: string
@@ -121,6 +122,24 @@ export default function Topbar({ title }: TopbarProps) {
           </DropdownMenu>
         )}
       </header>
+
+      {/* Demo-mode banner — sandbox data is ephemeral and reaped on a timer. */}
+      {isDemoSession() && (
+        <div className="flex items-center justify-center gap-3 bg-amber-100 px-4 py-1.5 text-center text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+          <span>Demo mode — a sandbox with sample data that resets periodically.</span>
+          <button
+            type="button"
+            data-testid="demo-exit"
+            onClick={() => {
+              logout()
+              window.location.assign('/login')
+            }}
+            className="font-medium underline underline-offset-2 hover:no-underline"
+          >
+            Exit demo
+          </button>
+        </div>
+      )}
 
       {/* Mobile drawer — closed by default, Sheet content not mounted until open */}
       <div className="md:hidden">

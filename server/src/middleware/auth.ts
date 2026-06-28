@@ -6,6 +6,7 @@ import { entraConfig } from '../config/entra';
 import { forbidden, unauthorized } from '../utils/errors';
 import logger from '../config/logger';
 import { userModel } from '../models/user';
+import { getDemoSecret, isDemoEnabled } from '../config/demo';
 
 // JWKS client — caches signing keys from Entra ID.
 // Why higher limits: Entra rotates keys periodically; cache + a generous request
@@ -171,6 +172,77 @@ async function handleStubAuth(req: Request, next: NextFunction): Promise<boolean
 }
 
 /**
+ * Demo sandbox auth (production-safe). Validates a demo session token signed by
+ * this server (HS256 + DEMO_JWT_SECRET), never an Entra key. Completely separate
+ * from the dev-only stub path: it is gated solely by ENABLE_DEMO and a valid demo
+ * token, and can ONLY ever resolve to a row flagged is_demo. Returns true when it
+ * has handled the request (authenticated or rejected), false to fall through to
+ * real Entra auth (e.g. when a genuine Entra token was presented).
+ */
+async function handleDemoAuth(req: Request, next: NextFunction): Promise<boolean> {
+  if (!isDemoEnabled()) return false;
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.length > 8192) {
+    return false;
+  }
+  const secret = getDemoSecret();
+  if (!secret) return false;
+
+  const token = authHeader.slice(7);
+  let decoded: jwt.JwtPayload;
+  try {
+    decoded = await new Promise<jwt.JwtPayload>((resolve, reject) => {
+      jwt.verify(token, secret, { algorithms: ['HS256'], clockTolerance: 5 }, (err, payload) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(payload as jwt.JwtPayload);
+      });
+    });
+  } catch {
+    // Not a valid demo token (e.g. a real Entra RS256 token) — fall through.
+    return false;
+  }
+
+  // Proof of intent: only tokens explicitly minted as demo tokens are honored.
+  if (decoded.demo !== true) return false;
+
+  const demoUserId = Number(decoded.sub);
+  if (!Number.isSafeInteger(demoUserId) || demoUserId <= 0) {
+    next(unauthorized('Invalid demo token'));
+    return true;
+  }
+
+  const user = await userModel.findById(demoUserId);
+  // The is_demo column is the source of truth: a token referencing a real user's
+  // id is rejected here, so a demo token can never impersonate a real account.
+  if (!user || !user.is_demo) {
+    next(unauthorized('Demo session is no longer valid'));
+    return true;
+  }
+  if (user.demo_expires_at && new Date(user.demo_expires_at).getTime() < Date.now()) {
+    next(unauthorized('Demo session has expired'));
+    return true;
+  }
+  if (!user.is_active) {
+    next(unauthorized('User account is deactivated'));
+    return true;
+  }
+
+  req.user = {
+    id: user.id,
+    role: user.role as Role,
+    email: user.email,
+    display_name: user.display_name,
+    demoMode: true,
+  };
+  next();
+  return true;
+}
+
+/**
  * Authenticate requests using Entra ID JWT bearer tokens.
  *
  * Flow:
@@ -181,6 +253,9 @@ async function handleStubAuth(req: Request, next: NextFunction): Promise<boolean
  * 5. Attach user info to req.user
  */
 export const authenticate = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+  // Public demo sandbox (production-safe), checked before the dev stub path.
+  if (await handleDemoAuth(req, next)) return;
+
   // In development, allow stub auth via X-Stub-User-Id header
   if (await handleStubAuth(req, next)) return;
 
@@ -198,6 +273,19 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
     const entraRole = resolveRole(decoded.roles);
     if (!entraRole) {
       next(forbidden('An assigned application role is required'));
+      return;
+    }
+
+    // Owner allowlist: when OWNER_OIDS is set, only those Entra object ids may
+    // sign in (the public demo path is separate). Empty/unset = unchanged, so
+    // dev and tests are unaffected. Checked before any DB upsert.
+    const ownerOids = (process.env.OWNER_OIDS || '')
+      .split(',')
+      .map((oid) => oid.trim())
+      .filter(Boolean);
+    if (ownerOids.length > 0 && !ownerOids.includes(decoded.oid)) {
+      logger.warn('Rejected login: object id not in OWNER_OIDS allowlist', { oid: decoded.oid });
+      next(forbidden('Access is restricted to the application owner'));
       return;
     }
 

@@ -3,7 +3,7 @@
 A full-stack expense management system: employees submit expenses, managers approve or reject them, and admins have organisation-wide oversight. Authentication is delegated to Microsoft Entra ID; the manager hierarchy is sourced from Microsoft Graph.
 
 - **Backend** — Express 4 + TypeScript, MySQL 8, Entra ID JWT auth (`jwks-rsa`), Zod validation, structured Winston JSON logs with secret redaction, Prometheus metrics on a separate internal listener.
-- **Frontend** — React 19 + TypeScript + Vite 8, Tailwind CSS v4 + shadcn/ui (Radix) with a dark-by-default theme, Recharts dashboards, MSAL (PKCE) **or** a localhost-only stub-auth path, React Router, TanStack Query for server-state/data fetching, Axios with a token interceptor, react-hook-form + Zod, sonner toasts.
+- **Frontend** — React 19 + TypeScript + Vite 8, Tailwind CSS v4 + shadcn/ui (Radix) with a dark-by-default theme, Recharts dashboards, MSAL (PKCE), a production-safe public **demo** session, **or** a localhost-only stub-auth path, React Router, TanStack Query for server-state/data fetching, Axios with a token interceptor, react-hook-form + Zod, sonner toasts.
 - **Database** — MySQL with optimistic concurrency on `expenses.version`, append-only `audit_logs`, soft delete on expenses.
 - **Observability** — Prometheus + Grafana + Loki + Promtail, all wired in Docker Compose.
 - **Tests** — Jest (server unit + integration against a real MySQL container), a lighter Jest + React Testing Library suite on the client, and Playwright e2e against a stub-auth dev server.
@@ -58,6 +58,17 @@ Each workspace (`server/`, `client/`, `e2e/`) has its own `package.json` and is 
    The API runs as a non-root user (with `tini` as PID 1 for clean signal handling) on a read-only root filesystem, with dropped Linux capabilities and per-container CPU, memory, and PID limits. Every container sets `no-new-privileges` and drops all capabilities, every image is pinned by digest, and container logs are size-capped (`max-size: 10m`, `max-file: 3`). Promtail discovers and tails container logs through a read-only Docker-socket proxy (it never mounts the Docker socket itself), so no log-shipping process can reach the daemon's write API or read other containers' secrets. Receipt uploads persist to the named `app_uploads` volume.
 
 4. Use `docker/docker-compose.override.yml` for ad-hoc local debugging overrides (e.g. publishing the MySQL port on `127.0.0.1:3306`). That file is gitignored.
+
+## Public Demo & Owner Gating
+
+The same build serves three audiences, all gated by env:
+
+- **Owner only (production):** restrict sign-in to a single user — assign the Entra app role to just that account and/or set `OWNER_OIDS` (comma-separated Entra object ids) on the API. Anyone else is rejected with 403.
+- **Public demo:** set `ENABLE_DEMO=true` + `DEMO_JWT_SECRET=<random>` (API) and `VITE_ENABLE_DEMO=true` (client). Visitors launch an isolated, seeded sandbox (a manager with a team and sample expenses) via a server-signed session token and exercise the full submit/approve/reject flow without ever touching real data. Workspaces auto-expire (`DEMO_SESSION_TTL_SECONDS`, default 2h), are reaped on a timer, and are capped by `DEMO_MAX_ACTIVE`. This path is entirely separate from dev stub auth.
+
+### Single-image deploy
+
+The root `Dockerfile` builds client + server into one image where Express also serves the built SPA (same origin, no CORS) — suited to a PaaS that builds from a root `Dockerfile` and routes to one port. `VITE_*` values are build args; runtime config (`DB_*`, `ENTRA_*`, `CORS_ORIGIN`, `ENABLE_DEMO`, `DEMO_JWT_SECRET`, `OWNER_OIDS`) is supplied at run time. The multi-service `docker/docker-compose.yml` remains the full local stack.
 
 ## Local Development (without Docker)
 

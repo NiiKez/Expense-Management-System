@@ -18,6 +18,12 @@ CREATE TABLE users (
     manager_id      INT UNSIGNED    NULL,                       -- FK -> users.id (cached from Graph API)
     is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
 
+    -- Public demo sandbox. Demo users are ephemeral, created per visitor, and
+    -- reaped after demo_expires_at. demo_session_id groups one workspace's users.
+    is_demo         BOOLEAN         NOT NULL DEFAULT FALSE,
+    demo_expires_at TIMESTAMP       NULL,
+    demo_session_id VARCHAR(36)     NULL,
+
     -- In-app user preferences. Identity (name/email/role/manager) stays
     -- Entra-owned; only these self-service settings live in-app.
     default_currency    CHAR(3)     NULL,                       -- preferred currency for new expenses (NULL = USD fallback)
@@ -32,6 +38,8 @@ CREATE TABLE users (
     UNIQUE KEY uk_email (email),
     KEY idx_manager_id (manager_id),
     KEY idx_role (role),
+    KEY idx_demo (is_demo, demo_expires_at),
+    KEY idx_demo_session (demo_session_id),
 
     CONSTRAINT fk_users_manager
         FOREIGN KEY (manager_id) REFERENCES users (id)
@@ -234,8 +242,15 @@ CREATE TRIGGER trg_audit_logs_no_delete
 BEFORE DELETE ON audit_logs
 FOR EACH ROW
 BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'audit_logs is append-only';
+    -- Append-only for real activity. Demo-mode audit rows (performed by an
+    -- ephemeral demo user) are exempt so expired demo workspaces can be reaped;
+    -- real users' audit history stays immutable.
+    IF NOT EXISTS (
+        SELECT 1 FROM users WHERE id = OLD.performed_by AND is_demo = TRUE
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'audit_logs is append-only';
+    END IF;
 END$$
 
 DELIMITER ;

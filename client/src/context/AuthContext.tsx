@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { loginRequest } from '../services/auth';
 import { IS_STUB_AUTH_MODE } from '../services/env';
 import { clearStoredStubUser, getStoredStubUser, setStoredStubUser } from '../services/stubAuth';
+import { clearDemoToken, getStoredDemoToken } from '../services/demoAuth';
 import { useMe } from '../queries/me';
 import type { User } from '../types';
 
@@ -89,9 +90,39 @@ function MsalAuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+// Demo sandbox session: authentication is simply "we hold a demo token and /me
+// resolves". No MSAL involvement; logout clears the token.
+function DemoAuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
+  const { data, isLoading, isError } = useMe({ enabled: true });
+  const user: User | null = !isError ? data ?? null : null;
+
+  const logout = useCallback(() => {
+    queryClient.removeQueries({ queryKey: ['me'] });
+    clearDemoToken();
+  }, [queryClient]);
+
+  const value = useMemo(
+    () => ({
+      user,
+      isAuthenticated: !!user,
+      isLoading,
+      login: async () => {},
+      logout,
+    }),
+    [user, isLoading, logout],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (IS_STUB_AUTH_MODE) {
     return <StubAuthProvider>{children}</StubAuthProvider>;
+  }
+  // A live demo token wins over MSAL so the visitor lands straight in the app.
+  if (getStoredDemoToken()) {
+    return <DemoAuthProvider>{children}</DemoAuthProvider>;
   }
   return <MsalAuthProvider>{children}</MsalAuthProvider>;
 }

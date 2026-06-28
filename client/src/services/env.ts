@@ -73,6 +73,9 @@ function getRedirectUri(value: unknown): string {
 
 export const AUTH_MODE = getAuthMode(import.meta.env.VITE_AUTH_MODE);
 export const IS_STUB_AUTH_MODE = AUTH_MODE === 'stub' && !import.meta.env.PROD && isLocalhost();
+// Whether to surface the public "Explore the demo" entry point. Unlike stub
+// auth, this is production-safe (the demo session uses a real server-signed JWT).
+export const IS_DEMO_ENABLED = import.meta.env.VITE_ENABLE_DEMO === 'true';
 export const API_BASE_URL = getApiBaseUrl(import.meta.env.VITE_API_URL);
 export const ENTRA_CLIENT_ID = import.meta.env.VITE_ENTRA_CLIENT_ID || '';
 export const ENTRA_TENANT_ID = getTenantId(import.meta.env.VITE_ENTRA_TENANT_ID);

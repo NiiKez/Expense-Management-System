@@ -6,6 +6,8 @@ import logger from './src/config/logger';
 import { summarizeHttpError } from './src/utils/logSanitizer';
 import { register } from './src/services/metricsService';
 import { intFromEnv } from './src/utils/env';
+import { isDemoEnabled } from './src/config/demo';
+import { startDemoCleanup } from './src/services/demoService';
 
 const REQUIRED_PRODUCTION_ENV = [
   'CORS_ORIGIN',
@@ -27,6 +29,14 @@ const stubAuthEnabled = process.env.ALLOW_STUB_AUTH === 'true';
 if (stubAuthEnabled && process.env.NODE_ENV !== 'development') {
   // eslint-disable-next-line no-console
   console.error('FATAL: ALLOW_STUB_AUTH=true is only permitted when NODE_ENV=development');
+  process.exit(1);
+}
+
+// Fail-fast: enabling the public demo without a signing secret would mint
+// unverifiable demo tokens. Require the pair or neither.
+if (process.env.ENABLE_DEMO === 'true' && !process.env.DEMO_JWT_SECRET) {
+  // eslint-disable-next-line no-console
+  console.error('FATAL: ENABLE_DEMO=true requires DEMO_JWT_SECRET to be set');
   process.exit(1);
 }
 
@@ -70,6 +80,9 @@ const PORT = intFromEnv(process.env.PORT, 3000);
 const httpServer = app.listen(PORT, () => {
   logger.info(`Server listening on port ${PORT}`);
 });
+
+// Periodically reap expired public-demo workspaces (no-op unless demo is on).
+const stopDemoCleanup = isDemoEnabled() ? startDemoCleanup() : null;
 
 // Prometheus metrics listener on a separate, unauthenticated port.
 // This port must NOT be exposed to the host — Prometheus scrapes it over the
@@ -119,6 +132,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   forceTimer.unref();
 
   try {
+    if (stopDemoCleanup) stopDemoCleanup();
     await Promise.all([
       closeServer(httpServer, 'HTTP'),
       closeServer(metricsServer, 'metrics'),
