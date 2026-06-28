@@ -156,7 +156,13 @@ describe('reapExpiredDemoWorkspaces', () => {
     const statements = conn.query.mock.calls.map((c) => String(c[0]));
     expect(statements.some((s) => /DELETE FROM audit_logs/.test(s))).toBe(true);
     expect(statements.some((s) => /DELETE FROM expenses/.test(s))).toBe(true);
+    expect(statements.some((s) => /DELETE FROM security_events/.test(s))).toBe(true);
     expect(statements.some((s) => /DELETE FROM users/.test(s))).toBe(true);
+    // security_events must be cleared BEFORE the users delete (FK-safe ordering).
+    const secIdx = statements.findIndex((s) => /DELETE FROM security_events/.test(s));
+    const usersIdx = statements.findIndex((s) => /DELETE FROM users/.test(s));
+    expect(secIdx).toBeGreaterThanOrEqual(0);
+    expect(secIdx).toBeLessThan(usersIdx);
     expect(conn.commit).toHaveBeenCalledTimes(1);
     expect(conn.release).toHaveBeenCalledTimes(1);
   });

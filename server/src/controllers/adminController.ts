@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { auditLogModel } from '../models/auditLog';
 import { expenseModel } from '../models/expense';
 import { userModel } from '../models/user';
-import { AuditAction, Status } from '../types';
+import { AuditAction, Status, SecurityEventType, SecurityOutcome } from '../types';
+import { securityEventModel } from '../models/securityEvent';
 import { AUDIT_ACTIONS, CATEGORIES, STATUSES, EXPORT_MAX_ROWS } from '../utils/constants';
 import { parsePagination } from '../utils/pagination';
 import {
@@ -176,6 +177,25 @@ export const exportAuditLogs = async (req: Request, res: Response, next: NextFun
     if (capped) {
       logger.warn('Audit log export truncated at row cap', { cap: EXPORT_MAX_ROWS });
     }
+
+    // Privileged read of the audit trail — record who exported what and how much.
+    const filters: Record<string, unknown> = {};
+    if (parsedExpenseId !== undefined) filters.expense_id = parsedExpenseId;
+    if (parsedPerformedBy !== undefined) filters.performed_by = parsedPerformedBy;
+    if (parsedAction !== undefined) filters.action = parsedAction;
+    if (parsedDateFrom) filters.date_from = parsedDateFrom;
+    if (parsedDateTo) filters.date_to = parsedDateTo;
+
+    await securityEventModel.record({
+      event_type: SecurityEventType.AUDIT_LOG_EXPORTED,
+      outcome: SecurityOutcome.SUCCESS,
+      user_id: req.user?.id ?? null,
+      role: req.user?.role ?? null,
+      ip_address: req.ip ?? null,
+      request_id: req.id ?? null,
+      detail: `Exported ${data.length} audit-log row(s)`,
+      metadata: { filters, row_count: data.length, capped },
+    });
 
     const csv = toCsv(
       ['ID', 'Expense ID', 'Action', 'Performed By', 'Old Status', 'New Status', 'Details', 'When'],

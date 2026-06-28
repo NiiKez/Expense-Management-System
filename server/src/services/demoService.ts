@@ -204,7 +204,9 @@ export function signDemoToken(userId: number, role: Role): string {
  * Delete expired demo workspaces. FK order matters: audit_logs first (the
  * demo-aware delete trigger permits rows whose performer is a demo user), then
  * expenses (RESTRICT from audit cleared; receipts/comments/notifications cascade
- * on the expense), then the demo users (their remaining child rows cascade).
+ * on the expense), then security_events for those demo users (FK is SET NULL so
+ * it wouldn't block, but clearing them prevents orphaned rows accumulating),
+ * then the demo users themselves (their remaining child rows cascade).
  */
 export async function reapExpiredDemoWorkspaces(): Promise<number> {
   const conn = await pool.getConnection();
@@ -223,6 +225,7 @@ export async function reapExpiredDemoWorkspaces(): Promise<number> {
     const placeholders = ids.map(() => '?').join(', ');
     await conn.query(`DELETE FROM audit_logs WHERE performed_by IN (${placeholders})`, ids);
     await conn.query(`DELETE FROM expenses WHERE submitted_by IN (${placeholders})`, ids);
+    await conn.query(`DELETE FROM security_events WHERE user_id IN (${placeholders})`, ids);
     await conn.query(`DELETE FROM users WHERE id IN (${placeholders})`, ids);
 
     await conn.commit();

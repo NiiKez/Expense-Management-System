@@ -1,15 +1,20 @@
 import { Request, Response, NextFunction } from 'express';
 import { authenticate } from '../../middleware/auth';
-import { Role } from '../../types';
+import { Role, SecurityEventType, SecurityOutcome } from '../../types';
 import { userModel } from '../../models/user';
+import { securityEventModel } from '../../models/securityEvent';
 
 jest.mock('../../models/user', () => ({
   userModel: {
     findById: jest.fn(),
   },
 }));
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
 
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 
 function makeRequest(overrides: Partial<Request> = {}): Request {
   return {
@@ -67,6 +72,14 @@ describe('authenticate stub auth', () => {
       stubAuth: true,
     });
     expect(mockedUserModel.findById).toHaveBeenCalledWith(1);
+    // The dev stub path is recorded as a security event.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: SecurityEventType.STUB_AUTH_USED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: 1,
+      }),
+    );
   });
 
   it('rejects stub auth when the socket is not loopback', async () => {
@@ -80,5 +93,7 @@ describe('authenticate stub auth', () => {
     expect(err.statusCode).toBe(401);
     expect(err.message).toBe('Stub auth is only available from localhost');
     expect(mockedUserModel.findById).not.toHaveBeenCalled();
+    // A rejected stub request is not a recorded security event.
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
   });
 });

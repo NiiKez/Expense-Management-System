@@ -20,7 +20,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { generateKeyPairSync } from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { Role, User } from '../../types';
+import { Role, User, SecurityEventType, SecurityOutcome } from '../../types';
 import { AppError } from '../../utils/errors';
 
 // ── RSA key material ──────────────────────────────────────────
@@ -75,13 +75,20 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
   default: { warn: jest.fn(), debug: jest.fn(), info: jest.fn(), error: jest.fn() },
 }));
+// Security-event recording is verified in securityEvent.test.ts; here we only
+// assert it fires (or doesn't) on the right paths, so a no-op mock is enough.
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
 
 // Imports that depend on the mocks above come AFTER the jest.mock calls.
 import { authenticate } from '../../middleware/auth';
 import { entraConfig } from '../../config/entra';
 import { userModel } from '../../models/user';
+import { securityEventModel } from '../../models/securityEvent';
 
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 const [V1_ISSUER, V2_ISSUER] = entraConfig.issuers;
 const [V1_AUDIENCE, V2_AUDIENCE] = entraConfig.audiences;
 
@@ -415,6 +422,40 @@ describe('authenticate — real Entra ID JWT path', () => {
       // Assert the length cap fired (header-guard message), not the generic
       // verify catch-all — otherwise the test passes even if the cap is removed.
       expect(err?.message).toMatch(/Authorization header/i);
+    });
+  });
+
+  // ── Security-event trail ────────────────────────────────────
+  describe('security-event recording', () => {
+    it('records AUTH_FAILURE when token verification fails', async () => {
+      await run(makeReq(signToken({}, { privateKey: attackerPrivatePem })));
+
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.AUTH_FAILURE,
+          outcome: SecurityOutcome.FAILURE,
+        }),
+      );
+    });
+
+    it('records ROLE_CHANGED only when the synced role actually differs', async () => {
+      // Stored EMPLOYEE (default dbUser), token now ADMIN → a genuine change.
+      await run(makeReq(signToken({ roles: ['ADMIN'] })));
+
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.ROLE_CHANGED,
+          outcome: SecurityOutcome.SUCCESS,
+          metadata: expect.objectContaining({ old_role: Role.EMPLOYEE, new_role: Role.ADMIN }),
+        }),
+      );
+    });
+
+    it('does NOT record any security event on the per-request success path', async () => {
+      // Stored EMPLOYEE, token EMPLOYEE → no role change, no failure: no DB row.
+      await run(makeReq(signToken()));
+
+      expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
     });
   });
 });

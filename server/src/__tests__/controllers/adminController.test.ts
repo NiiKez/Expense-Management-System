@@ -9,7 +9,8 @@ import {
 import { auditLogModel } from '../../models/auditLog';
 import { expenseModel } from '../../models/expense';
 import { userModel } from '../../models/user';
-import { Role, Status, Category, AuditAction, Expense, User } from '../../types';
+import { securityEventModel } from '../../models/securityEvent';
+import { Role, Status, Category, AuditAction, Expense, User, SecurityEventType, SecurityOutcome } from '../../types';
 import { AppError } from '../../utils/errors';
 
 // ── Mock models + logger ──────────────────────────────────────────
@@ -19,6 +20,9 @@ import { AppError } from '../../utils/errors';
 jest.mock('../../models/auditLog');
 jest.mock('../../models/expense');
 jest.mock('../../models/user');
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
 jest.mock('../../config/logger', () => ({
   __esModule: true,
   default: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -29,6 +33,7 @@ import logger from '../../config/logger';
 const mockedAuditLogModel = auditLogModel as jest.Mocked<typeof auditLogModel>;
 const mockedExpenseModel = expenseModel as jest.Mocked<typeof expenseModel>;
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 const mockedLogger = logger as unknown as { warn: jest.Mock; info: jest.Mock; error: jest.Mock };
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -318,6 +323,9 @@ describe('adminController', () => {
         'ID,Title,Submitter,Submitter Email,Category,Amount,Currency,Date,Status,Filed',
       );
       expect(body).toContain('Flight to NYC');
+      // Exporting expenses is NOT a recorded security event — only audit-log
+      // exports are.
+      expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -440,6 +448,17 @@ describe('adminController', () => {
       expect(body).toContain('Manager Mike');
       // details serialized as JSON (quoted because it contains a comma/quote).
       expect(body).toContain('looks good');
+
+      // The privileged export is recorded against the requesting admin.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.AUDIT_LOG_EXPORTED,
+          outcome: SecurityOutcome.SUCCESS,
+          user_id: 3,
+          role: Role.ADMIN,
+          metadata: expect.objectContaining({ row_count: 1, filters: { action: AuditAction.APPROVED } }),
+        }),
+      );
     });
 
     it('neutralizes CSV formula injection in the performer name', async () => {
