@@ -90,6 +90,14 @@ describe('demoLogin route', () => {
         role: Role.MANAGER,
       }),
     );
+    // Issuing a demo session is recorded as a security event.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: SecurityEventType.DEMO_SESSION_ISSUED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: 7,
+      }),
+    );
     expect(next).not.toHaveBeenCalled();
   });
 
