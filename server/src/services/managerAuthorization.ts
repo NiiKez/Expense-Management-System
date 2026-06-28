@@ -58,6 +58,36 @@ export async function verifyManagerRelationship(
   submittedByUserId: number,
   options: ManagerRelationshipOptions = {},
 ): Promise<ManagerRelationshipResult> {
+  // Demo sandbox sessions are fully self-contained and MUST stay inside their own
+  // workspace. Checked BEFORE the ADMIN bypass below: a demo session resolves to a
+  // real ADMIN/MANAGER row, so without this a demo ADMIN would inherit the blanket
+  // admin bypass and could read or act on real (or other demo workspaces')
+  // expenses by guessing ids. A demo caller may only ever touch an expense whose
+  // submitter belongs to the SAME demo session.
+  if (req.user!.demoMode === true) {
+    const submitter = await userModel.findById(submittedByUserId);
+    if (!submitter) {
+      return { allowed: false, reason: 'Expense submitter not found' };
+    }
+    // demo_session_id is the authoritative boundary (a real user's is NULL, so it
+    // can never match a session uuid); is_demo is 0/1 at runtime, hence the coerce.
+    const sameWorkspace =
+      !!submitter.is_demo &&
+      !!req.user!.demoSessionId &&
+      submitter.demo_session_id === req.user!.demoSessionId;
+    if (!sameWorkspace) {
+      return { allowed: false, reason: 'This expense is outside your demo workspace.' };
+    }
+    // Inside the workspace, mirror real RBAC: a demo ADMIN sees everything; a demo
+    // MANAGER is limited to its seeded direct reports.
+    if (req.user!.role === Role.ADMIN) {
+      return { allowed: true };
+    }
+    return submitter.manager_id === req.user!.id
+      ? { allowed: true }
+      : { allowed: false, reason: 'Manager relationship could not be verified from the local cache.' };
+  }
+
   if (req.user!.role === Role.ADMIN) {
     return { allowed: true };
   }
@@ -74,13 +104,9 @@ export async function verifyManagerRelationship(
   // cache bypass is never honored in production even if a stub flag somehow leaks,
   // so authorization no longer rests solely on the server.ts env gate.
   const stubAuth = req.user!.stubAuth === true && process.env.NODE_ENV !== 'production';
-  // Demo sandbox sessions have no Graph-capable token and are fully
-  // self-contained, so the seeded manager_id is authoritative within the
-  // sandbox. Trust it (like stub auth) and skip Graph entirely.
-  const demoMode = req.user!.demoMode === true;
 
   const allowFromDatabaseCache = (): ManagerRelationshipResult => {
-    if (options.allowCachedFallback !== true && !stubAuth && !demoMode) {
+    if (options.allowCachedFallback !== true && !stubAuth) {
       return {
         allowed: false,
         reason: 'Manager relationship could not be verified against Microsoft Graph.',
@@ -92,10 +118,6 @@ export async function verifyManagerRelationship(
       ? { allowed: true }
       : { allowed: false, reason: 'Manager relationship could not be verified from the local cache.' };
   };
-
-  if (demoMode) {
-    return allowFromDatabaseCache();
-  }
 
   const token = getBearerToken(req);
   if (!token) {
