@@ -568,7 +568,8 @@ describe('adminController', () => {
 
       await getAllUsers(req as Request, res as Response, next);
 
-      expect(mockedUserModel.findAll).toHaveBeenCalledWith();
+      // Real admin → org-wide list (no demo scope passed).
+      expect(mockedUserModel.findAll).toHaveBeenCalledWith(undefined);
       expect(res.json).toHaveBeenCalledWith({ success: true, data: users });
       expect(next).not.toHaveBeenCalled();
     });
@@ -584,6 +585,63 @@ describe('adminController', () => {
 
       expect(next).toHaveBeenCalledWith(dbError);
       expect(res.json).not.toHaveBeenCalled();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Demo-session scoping — read views are scoped to the caller's own
+  // demo workspace; a demo session with no workspace id is refused (403)
+  // rather than ever running an unscoped, org-wide query.
+  // ────────────────────────────────────────────────────────────────
+
+  describe('demo session scoping', () => {
+    const demoReq = (overrides: Partial<Request> = {}): Partial<Request> =>
+      mockRequest({
+        user: {
+          id: 9,
+          role: Role.ADMIN,
+          email: 'demo.admin@demo.local',
+          display_name: 'Demo Admin',
+          demoMode: true,
+          demoSessionId: 'sess-abc',
+        },
+        ...overrides,
+      });
+
+    it('getAllUsers forwards the demo workspace id to the model', async () => {
+      mockedUserModel.findAll.mockResolvedValue([]);
+      await getAllUsers(demoReq() as Request, mockResponse() as Response, next);
+      expect(mockedUserModel.findAll).toHaveBeenCalledWith('sess-abc');
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('getAllExpenses forwards the demo workspace id to the model', async () => {
+      mockedExpenseModel.findAll.mockResolvedValue({ data: [], total: 0 });
+      await getAllExpenses(demoReq({ query: {} }) as Request, mockResponse() as Response, next);
+      expect(mockedExpenseModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ demoSessionId: 'sess-abc' }),
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('getAuditLogs forwards the demo workspace id to the model', async () => {
+      mockedAuditLogModel.findAll.mockResolvedValue({ data: [], total: 0 });
+      await getAuditLogs(demoReq({ query: {} }) as Request, mockResponse() as Response, next);
+      expect(mockedAuditLogModel.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ demoSessionId: 'sess-abc' }),
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('refuses a demo session with no workspace id (403) and never queries', async () => {
+      const req = mockRequest({
+        user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
+      });
+      await getAllUsers(req as Request, mockResponse() as Response, next);
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error).toBeInstanceOf(AppError);
+      expect(error.statusCode).toBe(403);
+      expect(mockedUserModel.findAll).not.toHaveBeenCalled();
     });
   });
 });

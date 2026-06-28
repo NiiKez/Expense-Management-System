@@ -71,6 +71,16 @@ describe('authenticate demo auth', () => {
     expect(req.user).toMatchObject({ id: 42, role: Role.MANAGER, demoMode: true });
   });
 
+  it('carries the workspace id (demo_session_id) onto req.user for scoping', async () => {
+    mockedUserModel.findById.mockResolvedValue(demoUser({ demo_session_id: 'sess-abc' }));
+    const req = reqWithToken(signDemo({ sub: '42', demo: true, role: Role.MANAGER }));
+
+    await authenticate(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user?.demoSessionId).toBe('sess-abc');
+  });
+
   it('rejects a demo token whose user row is not flagged is_demo', async () => {
     // A forged demo token pointing at a real user's id must not impersonate them.
     mockedUserModel.findById.mockResolvedValue(demoUser({ is_demo: 0 }));

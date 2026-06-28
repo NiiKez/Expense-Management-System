@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Routes, Route } from 'react-router-dom'
 import { renderWithProviders, makeMockAuthValue } from '../helpers/renderWithProviders'
@@ -35,9 +35,13 @@ jest.mock('../../services/api', () => ({
 }))
 
 import { useAuth } from '../../context/AuthContext'
+import api from '../../services/api'
 import Login from '../../pages/Login'
 
 const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>
+const mockApiPost = api.post as jest.Mock
+
+const DEMO_ROLES = ['ADMIN', 'MANAGER', 'EMPLOYEE'] as const
 
 function setAuth(overrides: Parameters<typeof makeMockAuthValue>[0] = {}) {
   const value = makeMockAuthValue(overrides)
@@ -137,24 +141,55 @@ describe('Login', () => {
       expect(auth.login).toHaveBeenCalledWith()
     })
 
-    it('shows the demo entry point only when demo mode is enabled', () => {
+    it('shows a demo role picker (one card per role) only when demo mode is enabled', () => {
       mockStubAuthMode = false
       mockDemoEnabled = true
       setAuth()
 
       renderWithProviders(<Login />)
 
-      expect(screen.getByTestId('demo-login')).toBeInTheDocument()
+      for (const role of DEMO_ROLES) {
+        expect(screen.getByTestId(`demo-login-${role}`)).toBeInTheDocument()
+      }
+      // The Microsoft sign-in button stays above the picker.
+      expect(screen.getByTestId('msal-login')).toBeInTheDocument()
     })
 
-    it('hides the demo entry point when demo mode is disabled', () => {
+    it('hides the demo picker when demo mode is disabled', () => {
       mockStubAuthMode = false
       mockDemoEnabled = false
       setAuth()
 
       renderWithProviders(<Login />)
 
-      expect(screen.queryByTestId('demo-login')).not.toBeInTheDocument()
+      for (const role of DEMO_ROLES) {
+        expect(screen.queryByTestId(`demo-login-${role}`)).not.toBeInTheDocument()
+      }
+    })
+
+    it('POSTs /auth/demo-login with the chosen role when a demo card is clicked', async () => {
+      const user = userEvent.setup()
+      mockStubAuthMode = false
+      mockDemoEnabled = true
+      setAuth()
+
+      // On success the handler calls window.location.assign('/'). jsdom's location
+      // is locked (non-configurable getter, read-only assign) so it can't be
+      // spied; the real call just logs a benign "Not implemented: navigation".
+      // Silence that one line and assert the request contract + resulting state.
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+
+      renderWithProviders(<Login />)
+
+      const card = screen.getByTestId('demo-login-MANAGER')
+      await user.click(card)
+
+      expect(mockApiPost).toHaveBeenCalledTimes(1)
+      expect(mockApiPost).toHaveBeenCalledWith('/auth/demo-login', { role: 'MANAGER' })
+      // The picker stays locked (pending) once a session is being minted.
+      await waitFor(() => expect(card).toBeDisabled())
+
+      errSpy.mockRestore()
     })
   })
 })

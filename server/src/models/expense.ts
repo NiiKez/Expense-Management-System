@@ -464,6 +464,10 @@ export const expenseModel = {
       order?: string;
       page?: number;
       pageSize?: number;
+      // When set, restrict the ledger to one demo workspace (a demo admin must
+      // never see real or other demo workspaces' expenses). The query already
+      // joins users, so this filters on the submitter's demo session.
+      demoSessionId?: string;
     } = {},
   ): Promise<{ data: Expense[]; total: number }> {
     const page = normalizePositiveInteger(options.page, DEFAULT_PAGE);
@@ -473,6 +477,10 @@ export const expenseModel = {
     const conditions: string[] = ['e.deleted_at IS NULL'];
     const params: (string | number)[] = [];
 
+    if (options.demoSessionId) {
+      conditions.push('u.is_demo = TRUE AND u.demo_session_id = ?');
+      params.push(options.demoSessionId);
+    }
     if (options.status) {
       conditions.push('e.status = ?');
       params.push(options.status);

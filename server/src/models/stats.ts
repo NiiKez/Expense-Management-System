@@ -80,22 +80,35 @@ export const statsModel = {
     };
   },
 
-  async getOrgStats(): Promise<AdminStats> {
+  // demoSessionId scopes every aggregate to a single demo workspace so a demo
+  // admin's dashboard reflects only its own seeded data, never real org-wide
+  // figures. Unset (real admin) leaves the queries org-wide / unchanged.
+  async getOrgStats(demoSessionId?: string): Promise<AdminStats> {
+    // Constrain expenses to the workspace's submitters; users to the workspace
+    // members. Parametrised, so the session id never touches the SQL string.
+    const expScope = demoSessionId
+      ? 'AND submitted_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)'
+      : '';
+    const userScope = demoSessionId ? 'AND is_demo = TRUE AND demo_session_id = ?' : '';
+    const p = demoSessionId ? [demoSessionId] : [];
+
     const [[org]] = await pool.execute<RowDataPacket[]>(
       `SELECT COALESCE(${BASE},0) AS t FROM expenses WHERE deleted_at IS NULL
-         AND YEAR(expense_date)=YEAR(CURDATE()) AND MONTH(expense_date)=MONTH(CURDATE())`) as unknown as [RowDataPacket[]];
+         AND YEAR(expense_date)=YEAR(CURDATE()) AND MONTH(expense_date)=MONTH(CURDATE()) ${expScope}`, p) as unknown as [RowDataPacket[]];
     const [[pending]] = await pool.execute<RowDataPacket[]>(
-      `SELECT COUNT(*) AS c FROM expenses WHERE status='PENDING' AND deleted_at IS NULL`) as unknown as [RowDataPacket[]];
+      `SELECT COUNT(*) AS c FROM expenses WHERE status='PENDING' AND deleted_at IS NULL ${expScope}`, p) as unknown as [RowDataPacket[]];
     const [[users]] = await pool.execute<RowDataPacket[]>(
-      `SELECT COUNT(*) AS c FROM users WHERE is_active = 1`) as unknown as [RowDataPacket[]];
+      `SELECT COUNT(*) AS c FROM users WHERE is_active = 1 ${userScope}`, p) as unknown as [RowDataPacket[]];
     const [[appMonth]] = await pool.execute<RowDataPacket[]>(
       `SELECT COALESCE(${BASE},0) AS t FROM expenses WHERE status='APPROVED' AND deleted_at IS NULL
-         AND YEAR(expense_date)=YEAR(CURDATE()) AND MONTH(expense_date)=MONTH(CURDATE())`) as unknown as [RowDataPacket[]];
+         AND YEAR(expense_date)=YEAR(CURDATE()) AND MONTH(expense_date)=MONTH(CURDATE()) ${expScope}`, p) as unknown as [RowDataPacket[]];
     const [catRows] = await pool.execute<RowDataPacket[]>(
       `SELECT category, COUNT(*) AS count, COALESCE(${BASE},0) AS total
-       FROM expenses WHERE deleted_at IS NULL GROUP BY category`);
-    const [monthly] = await pool.execute<RowDataPacket[]>(
-      MONTHLY_SQL.replace('AND {scope}', ''));
+       FROM expenses WHERE deleted_at IS NULL ${expScope} GROUP BY category`, p);
+    const monthlySql = demoSessionId
+      ? MONTHLY_SQL.replace('{scope}', 'submitted_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)')
+      : MONTHLY_SQL.replace('AND {scope}', '');
+    const [monthly] = await pool.execute<RowDataPacket[]>(monthlySql, p);
     return {
       orgSpendMonth: num(org.t), pendingOrgWide: num(pending.c), activeUsers: num(users.c),
       approvedMonth: num(appMonth.t),

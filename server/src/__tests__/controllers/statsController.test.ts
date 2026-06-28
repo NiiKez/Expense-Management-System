@@ -82,9 +82,36 @@ describe('statsController.getAdminStats', () => {
     const req = mockRequest({ user: { id: 3, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' } });
     const res = mockResponse();
     await getAdminStats(req as Request, res as Response, next);
-    expect(mockedStatsModel.getOrgStats).toHaveBeenCalledWith();
+    // Real admin → org-wide (no demo scope).
+    expect(mockedStatsModel.getOrgStats).toHaveBeenCalledWith(undefined);
     expect(res.json).toHaveBeenCalledWith({ success: true, data });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('scopes the aggregates to the demo workspace for a demo session', async () => {
+    const data = {
+      orgSpendMonth: 100, pendingOrgWide: 1, activeUsers: 4, approvedMonth: 50,
+      baseCurrency: 'USD', byCategory: [], monthly: [],
+    };
+    mockedStatsModel.getOrgStats.mockResolvedValue(data);
+    const req = mockRequest({
+      user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true, demoSessionId: 'sess-abc' },
+    });
+    const res = mockResponse();
+    await getAdminStats(req as Request, res as Response, next);
+    expect(mockedStatsModel.getOrgStats).toHaveBeenCalledWith('sess-abc');
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects a demo session with no workspace id (403) instead of an org-wide query', async () => {
+    const req = mockRequest({
+      user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
+    });
+    const res = mockResponse();
+    await getAdminStats(req as Request, res as Response, next);
+    const error = next.mock.calls[0][0] as unknown as { statusCode?: number };
+    expect(error.statusCode).toBe(403);
+    expect(mockedStatsModel.getOrgStats).not.toHaveBeenCalled();
   });
 
   it('forwards model errors to next and does not write a response', async () => {

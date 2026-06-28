@@ -30,13 +30,20 @@ export const userModel = {
     return rows[0] || null;
   },
 
-  async findAll(): Promise<User[]> {
+  async findAll(demoSessionId?: string): Promise<User[]> {
     // Bounded + explicit columns. The list is returned unpaginated (the client
     // resolves names against the full set), so cap it defensively and log if the
     // cap is reached rather than silently truncating the org.
+    //
+    // When demoSessionId is set the caller is a demo admin, so restrict the list
+    // to that one demo workspace's users — never real users or other workspaces.
+    const where = demoSessionId ? 'WHERE is_demo = TRUE AND demo_session_id = ?' : '';
+    const params: (string | number)[] = demoSessionId
+      ? [demoSessionId, MAX_USER_LIST + 1]
+      : [MAX_USER_LIST + 1];
     const [rows] = await pool.query<UserRow[]>(
-      `SELECT ${USER_LIST_COLUMNS} FROM users ORDER BY display_name ASC LIMIT ?`,
-      [MAX_USER_LIST + 1],
+      `SELECT ${USER_LIST_COLUMNS} FROM users ${where} ORDER BY display_name ASC LIMIT ?`,
+      params,
     );
     if (rows.length > MAX_USER_LIST) {
       logger.warn('User list hit the MAX_USER_LIST cap; result truncated', { cap: MAX_USER_LIST });

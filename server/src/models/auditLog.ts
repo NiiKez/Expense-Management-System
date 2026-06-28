@@ -80,10 +80,20 @@ export const auditLogModel = {
     order?: string;
     page?: number;
     pageSize?: number;
+    // When set, restrict the trail to one demo workspace (a demo admin must
+    // never see real or other demo workspaces' audit history). Every audit row
+    // is performed by a workspace user, so filter on the performer's session.
+    demoSessionId?: string;
   }): Promise<{ data: AuditLog[]; total: number }> {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
+    if (filters.demoSessionId) {
+      conditions.push(
+        'performed_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)',
+      );
+      params.push(filters.demoSessionId);
+    }
     if (filters.expense_id !== undefined) {
       conditions.push('expense_id = ?');
       params.push(filters.expense_id);

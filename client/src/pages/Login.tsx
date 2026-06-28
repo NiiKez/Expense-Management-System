@@ -1,48 +1,41 @@
 import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { ChevronRight, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { IS_DEMO_ENABLED, IS_STUB_AUTH_MODE } from '../services/env'
 import { STUB_USERS } from '../context/stubUsers'
 import api from '../services/api'
 import { storeDemoToken } from '../services/demoAuth'
-import type { Role, User } from '../types'
-import { Avatar, AvatarFallback } from '../components/ui/avatar'
-import { Badge } from '../components/ui/badge'
+import { Role } from '../types'
+import type { User } from '../types'
 import { Button } from '../components/ui/button'
+import AccountPicker, { type AccountPickerItem } from '../components/auth/AccountPicker'
 import Logo from '../components/layout/Logo'
 
-function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? '')
-    .join('')
-}
-
-const ROLE_BADGE: Record<Role, 'info' | 'secondary' | 'outline'> = {
-  ADMIN: 'info',
-  MANAGER: 'secondary',
-  EMPLOYEE: 'outline',
-}
+// The three personas a public demo visitor can step into. The `key` doubles as
+// the role sent to the server and as the pending-spinner match in AccountPicker.
+const DEMO_ACCOUNTS: AccountPickerItem[] = [
+  { key: Role.ADMIN, name: 'Demo Admin', subtitle: 'Full system access', role: Role.ADMIN, testId: 'demo-login-ADMIN' },
+  { key: Role.MANAGER, name: 'Demo User', subtitle: 'Approves team expenses', role: Role.MANAGER, testId: 'demo-login-MANAGER' },
+  { key: Role.EMPLOYEE, name: 'Jordan Lee', subtitle: 'Submits expenses', role: Role.EMPLOYEE, testId: 'demo-login-EMPLOYEE' },
+]
 
 export default function Login() {
   const { isAuthenticated, isLoading, login } = useAuth()
-  const [demoLoading, setDemoLoading] = useState(false)
+  const [demoPending, setDemoPending] = useState<Role | null>(null)
   const [demoError, setDemoError] = useState<string | null>(null)
 
-  const handleDemoLogin = async () => {
+  const handleDemoLogin = async (role: Role) => {
     setDemoError(null)
-    setDemoLoading(true)
+    setDemoPending(role)
     try {
-      const res = await api.post<{ data: { token: string } }>('/auth/demo-login')
+      const res = await api.post<{ data: { token: string } }>('/auth/demo-login', { role })
       storeDemoToken(res.data.data.token)
       // Full navigation so AuthProvider re-evaluates and mounts the demo session.
       window.location.assign('/')
     } catch {
       setDemoError('Could not start the demo right now. Please try again.')
-      setDemoLoading(false)
+      setDemoPending(null)
     }
   }
 
@@ -117,34 +110,19 @@ export default function Login() {
             </div>
 
             {IS_STUB_AUTH_MODE ? (
-              <ul className="space-y-2">
-                {STUB_USERS.map((u) => (
-                  <li key={u.id}>
-                    <button
-                      type="button"
-                      data-testid={`stub-login-${u.id}`}
-                      onClick={() => handleStubLogin(u)}
-                      className="group flex w-full items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-all hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <Avatar size="sm">
-                        <AvatarFallback>{initials(u.display_name)}</AvatarFallback>
-                      </Avatar>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-foreground">
-                          {u.display_name}
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {u.email}
-                        </span>
-                      </span>
-                      <Badge variant={ROLE_BADGE[u.role]} className="shrink-0 text-[10px] uppercase tracking-wide">
-                        {u.role}
-                      </Badge>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <AccountPicker
+                accounts={STUB_USERS.map((u) => ({
+                  key: String(u.id),
+                  name: u.display_name,
+                  subtitle: u.email,
+                  role: u.role,
+                  testId: `stub-login-${u.id}`,
+                }))}
+                onSelect={(account) => {
+                  const user = STUB_USERS.find((u) => String(u.id) === account.key)
+                  if (user) handleStubLogin(user)
+                }}
+              />
             ) : (
               <div className="space-y-3">
                 <Button
@@ -167,23 +145,11 @@ export default function Login() {
                       </div>
                     </div>
 
-                    <Button
-                      type="button"
-                      variant="outline"
-                      data-testid="demo-login"
-                      className="w-full"
-                      onClick={handleDemoLogin}
-                      disabled={demoLoading}
-                    >
-                      {demoLoading ? (
-                        <>
-                          <Loader2 className="mr-2 size-4 animate-spin" />
-                          Starting demo…
-                        </>
-                      ) : (
-                        'Explore the live demo'
-                      )}
-                    </Button>
+                    <AccountPicker
+                      accounts={DEMO_ACCOUNTS}
+                      onSelect={(account) => handleDemoLogin(account.role)}
+                      pendingKey={demoPending}
+                    />
 
                     {demoError && (
                       <p className="text-center text-xs text-destructive">{demoError}</p>

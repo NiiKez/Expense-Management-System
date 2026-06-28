@@ -13,6 +13,7 @@ import {
   parseStringQuery,
 } from '../utils/requestParsing';
 import { toCsv, csvDate, csvTimestamp } from '../utils/csv';
+import { demoScope } from '../middleware/rbac';
 import logger from '../config/logger';
 
 const UTF8_BOM = '﻿';
@@ -49,6 +50,8 @@ export const getAuditLogs = async (req: Request, res: Response, next: NextFuncti
       order: parsedOrder,
       page: parsedPage,
       pageSize: parsedPageSize,
+      // Demo sessions see only their own workspace's audit trail.
+      demoSessionId: demoScope(req),
     });
 
     res.json({
@@ -91,6 +94,8 @@ export const getAllExpenses = async (req: Request, res: Response, next: NextFunc
       order: parsedOrder,
       page: parsedPage,
       pageSize: parsedPageSize,
+      // Demo sessions see only their own workspace's expenses.
+      demoSessionId: demoScope(req),
     });
 
     res.json({
@@ -216,9 +221,10 @@ export const exportAuditLogs = async (req: Request, res: Response, next: NextFun
   }
 };
 
-export const getAllUsers = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const getAllUsers = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const users = await userModel.findAll();
+    // Demo sessions see only their own workspace's users.
+    const users = await userModel.findAll(demoScope(req));
     res.json({ success: true, data: users });
   } catch (err) {
     next(err);
