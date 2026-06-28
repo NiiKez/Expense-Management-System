@@ -27,9 +27,13 @@ export default function SpendTrendChart({ data, currency = 'USD' }: SpendTrendCh
     )
   }
 
+  // The API serialises MySQL DECIMAL totals as strings; recharts needs real
+  // numbers to size the bars and compute the Y-axis domain.
+  const chartData = data.map((d) => ({ ...d, total: Number(d.total) || 0 }))
+
   return (
     <ResponsiveContainer width="100%" height={240}>
-      <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+      <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
         <defs>
           <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.95} />
@@ -41,6 +45,7 @@ export default function SpendTrendChart({ data, currency = 'USD' }: SpendTrendCh
         <YAxis
           {...cleanAxisProps}
           width={64}
+          domain={[0, 'auto']}
           tickFormatter={(v: number) => formatCurrency(v, currency)}
         />
         <Tooltip content={<ChartTooltip currency={currency} />} cursor={chartCursor} />

@@ -34,6 +34,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'none'"],
+      // The hash whitelists the inline theme-init script in client/index.html
+      // (a flash-of-wrong-theme guard that runs before first paint); without it
+      // the strict CSP blocks the script and dark-mode users get a light flash.
+      scriptSrc: ["'self'", "'sha256-t1DzxWa0f4hvmUQzW8bYVGjrn8jzPwosACO6pQNpxLY='"],
       connectSrc: ["'self'", 'https://login.microsoftonline.com'],
       frameSrc: ['https://login.microsoftonline.com'],
       frameAncestors: ["'none'"],

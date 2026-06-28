@@ -37,13 +37,18 @@ export default function SpendByCategoryChart({ data, currency = 'USD' }: SpendBy
 
   const height = Math.max(200, data.length * 46)
 
+  // The API serialises MySQL DECIMAL totals as strings; recharts needs real
+  // numbers to size the bars and compute the value-axis domain.
+  const chartData = data.map((d) => ({ ...d, total: Number(d.total) || 0 }))
+
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }}>
+      <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }}>
         <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
           type="number"
           {...cleanAxisProps}
+          domain={[0, 'auto']}
           tickFormatter={(v: number) => formatCurrency(v, currency)}
         />
         <YAxis

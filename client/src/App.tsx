@@ -126,7 +126,7 @@ function App() {
       <Route
         path="*"
         element={
-          <AppShell>
+          <AppShell title="Not found">
             <NotFound />
           </AppShell>
         }

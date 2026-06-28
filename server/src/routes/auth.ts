@@ -3,9 +3,20 @@ import { isDemoEnabled } from '../config/demo';
 import { canCreateDemoWorkspace, createDemoWorkspace, signDemoToken } from '../services/demoService';
 import { AppError, forbidden } from '../utils/errors';
 import { securityEventModel } from '../models/securityEvent';
-import { SecurityEventType, SecurityOutcome } from '../types';
+import { Role, SecurityEventType, SecurityOutcome } from '../types';
 
 const router = Router();
+
+// Roles a visitor may pick on the demo login page. Matched case-sensitively
+// against the Role enum; anything else falls back to MANAGER.
+const DEMO_ROLES: readonly Role[] = [Role.ADMIN, Role.MANAGER, Role.EMPLOYEE];
+
+function resolveRequestedDemoRole(body: unknown): Role {
+  const requested = (body as { role?: unknown } | null | undefined)?.role;
+  return typeof requested === 'string' && (DEMO_ROLES as readonly string[]).includes(requested)
+    ? (requested as Role)
+    : Role.MANAGER;
+}
 
 /**
  * POST /api/v1/auth/demo-login
@@ -27,30 +38,24 @@ export const demoLogin = async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
+    const role = resolveRequestedDemoRole(req.body);
     const workspace = await createDemoWorkspace();
-    const token = signDemoToken(workspace.userId, workspace.role);
+    const userId = workspace.usersByRole[role];
+    const token = signDemoToken(userId, role);
 
     await securityEventModel.record({
       event_type: SecurityEventType.DEMO_SESSION_ISSUED,
       outcome: SecurityOutcome.SUCCESS,
-      user_id: workspace.userId,
-      role: workspace.role,
+      user_id: userId,
+      role,
       ip_address: req.ip ?? null,
       request_id: req.id ?? null,
-      detail: 'Public demo workspace provisioned',
+      detail: `Public demo workspace provisioned (role: ${role})`,
     });
 
     res.status(201).json({
       success: true,
-      data: {
-        token,
-        user: {
-          id: workspace.userId,
-          role: workspace.role,
-          email: workspace.email,
-          display_name: workspace.display_name,
-        },
-      },
+      data: { token },
     });
   } catch (err) {
     next(err);

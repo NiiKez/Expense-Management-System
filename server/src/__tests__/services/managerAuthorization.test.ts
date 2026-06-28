@@ -91,6 +91,101 @@ describe('managerAuthorization', () => {
       });
     });
 
+    // A demo session resolves to a real ADMIN/MANAGER row, so it must be fenced
+    // to its own workspace BEFORE the blanket admin bypass above — otherwise a
+    // public demo admin could read/act on real or other-workspace expenses.
+    describe('demo sandbox workspace boundary', () => {
+      const demoAdmin = (sessionId?: string) => ({
+        id: MANAGER_ID,
+        role: Role.ADMIN,
+        email: 'demo.admin@demo.local',
+        display_name: 'Demo Admin',
+        demoMode: true,
+        demoSessionId: sessionId,
+      });
+      const demoManager = (sessionId: string) => ({
+        id: MANAGER_ID,
+        role: Role.MANAGER,
+        email: 'demo.user@demo.local',
+        display_name: 'Demo User',
+        demoMode: true,
+        demoSessionId: sessionId,
+      });
+
+      it('authorizes a demo ADMIN for a submitter in the SAME workspace, never calling Graph', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-1' }),
+        );
+        const req = mockRequest({ user: demoAdmin('sess-1'), headers: { authorization: 'Bearer demo-token' } });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result).toEqual({ allowed: true });
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('DENIES a demo ADMIN for a submitter in a DIFFERENT demo workspace', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-2' }),
+        );
+        const req = mockRequest({ user: demoAdmin('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe('This expense is outside your demo workspace.');
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('DENIES a demo ADMIN for a real (non-demo) submitter', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 0, demo_session_id: null }),
+        );
+        const req = mockRequest({ user: demoAdmin('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe('This expense is outside your demo workspace.');
+      });
+
+      it('DENIES a demo session that somehow lacks a workspace id', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-1' }),
+        );
+        const req = mockRequest({ user: demoAdmin(undefined) });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe('This expense is outside your demo workspace.');
+      });
+
+      it('authorizes a demo MANAGER only for its own direct report in-workspace', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-1', manager_id: MANAGER_ID }),
+        );
+        const req = mockRequest({ user: demoManager('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result).toEqual({ allowed: true });
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('DENIES a demo MANAGER for an in-workspace user that is not its report', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-1', manager_id: 999 }),
+        );
+        const req = mockRequest({ user: demoManager('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toContain('could not be verified from the local cache');
+      });
+    });
+
     describe('submitter not found', () => {
       it('denies with a "submitter not found" reason and never calls Graph', async () => {
         mockedUserModel.findById.mockResolvedValue(null);

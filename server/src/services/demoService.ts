@@ -11,10 +11,11 @@ import {
 } from '../config/demo';
 
 export interface DemoWorkspace {
-  userId: number;
-  role: Role;
-  email: string;
-  display_name: string;
+  sessionId: string;
+  expiresAt: Date;
+  // userId for each role the visitor may log in as (the role picker on the
+  // login page). EMPLOYEE resolves to the first seeded report (Jordan Lee).
+  usersByRole: Record<Role, number>;
 }
 
 interface SeedExpense {
@@ -40,7 +41,7 @@ async function insertDemoUser(
   },
 ): Promise<number> {
   const entraId = randomUUID(); // 36 chars — fits users.entra_id and is globally unique
-  const email = `${params.emailLocal}.${params.sessionId.slice(0, 12)}@demo.local`;
+  const email = `${params.emailLocal}.${params.sessionId.slice(0, 6)}@demo.local`;
   const [result] = await conn.execute<ResultSetHeader>(
     `INSERT INTO users
        (entra_id, email, display_name, role, manager_id, is_demo, demo_expires_at, demo_session_id)
@@ -113,11 +114,13 @@ function buildSeedExpenses(managerId: number, emp1Id: number, emp2Id: number): S
 }
 
 /**
- * Create a fresh, fully isolated demo workspace: a manager (the visitor) with
- * two direct reports and a realistic spread of seeded expenses. All rows are
- * flagged is_demo and stamped with an expiry, then reaped after the TTL.
+ * Create a fresh, fully isolated demo workspace: an admin, a manager (with two
+ * direct reports) and a realistic spread of seeded expenses. All four users are
+ * tied by the same demo_session_id, flagged is_demo and stamped with an expiry,
+ * then reaped after the TTL.
  *
- * Returns the visitor (manager) identity used to mint the demo session token.
+ * Returns the per-role user ids so the caller can mint a demo session token for
+ * whichever role the visitor picked on the login page.
  */
 export async function createDemoWorkspace(): Promise<DemoWorkspace> {
   const sessionId = randomUUID();
@@ -127,6 +130,14 @@ export async function createDemoWorkspace(): Promise<DemoWorkspace> {
   try {
     await conn.beginTransaction();
 
+    const adminId = await insertDemoUser(conn, {
+      displayName: 'Demo Admin',
+      emailLocal: 'demo.admin',
+      role: Role.ADMIN,
+      managerId: null,
+      sessionId,
+      ttlSeconds,
+    });
     const managerId = await insertDemoUser(conn, {
       displayName: 'Demo User',
       emailLocal: 'demo.user',
@@ -158,12 +169,15 @@ export async function createDemoWorkspace(): Promise<DemoWorkspace> {
 
     await conn.commit();
 
-    logger.info('Created demo workspace', { sessionId, managerId });
+    logger.info('Created demo workspace', { sessionId, adminId, managerId });
     return {
-      userId: managerId,
-      role: Role.MANAGER,
-      email: `demo.user.${sessionId.slice(0, 12)}@demo.local`,
-      display_name: 'Demo User',
+      sessionId,
+      expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+      usersByRole: {
+        [Role.ADMIN]: adminId,
+        [Role.MANAGER]: managerId,
+        [Role.EMPLOYEE]: emp1Id,
+      },
     };
   } catch (err) {
     await conn.rollback();

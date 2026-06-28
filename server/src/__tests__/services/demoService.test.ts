@@ -59,30 +59,47 @@ afterEach(() => {
 });
 
 describe('createDemoWorkspace', () => {
-  it('seeds a manager, two reports and their expenses inside one transaction', async () => {
+  it('seeds an admin, manager, two reports and their expenses inside one transaction', async () => {
     const conn = fakeConnection();
+    let nextId = 0;
+    // Hand out incrementing insertIds so we can verify the per-role mapping:
+    // admin(1), manager(2), emp1/Jordan(3), emp2/Sam(4), then expenses.
+    conn.execute.mockImplementation(() => Promise.resolve([{ insertId: ++nextId }]));
     mockedPool.getConnection.mockResolvedValue(conn);
 
     const workspace = await createDemoWorkspace();
 
-    expect(workspace).toMatchObject({
-      userId: 1,
-      role: Role.MANAGER,
-      display_name: 'Demo User',
+    expect(workspace.usersByRole).toEqual({
+      [Role.ADMIN]: 1,
+      [Role.MANAGER]: 2,
+      [Role.EMPLOYEE]: 3, // the first report (Jordan Lee)
     });
-    expect(workspace.email).toMatch(/^demo\.user\.[0-9a-f-]{12}@demo\.local$/);
+    expect(typeof workspace.sessionId).toBe('string');
+    expect(workspace.expiresAt).toBeInstanceOf(Date);
 
     expect(conn.beginTransaction).toHaveBeenCalledTimes(1);
     expect(conn.commit).toHaveBeenCalledTimes(1);
     expect(conn.rollback).not.toHaveBeenCalled();
     expect(conn.release).toHaveBeenCalledTimes(1);
 
-    // 3 demo users + 7 seeded expenses (each with at least a SUBMITTED audit row,
+    // 4 demo users + 7 seeded expenses (each with at least a SUBMITTED audit row,
     // plus an extra row for the approved/rejected ones).
     const userInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO users/.test(c[0]));
     const expenseInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO expenses/.test(c[0]));
-    expect(userInserts).toHaveLength(3);
+    expect(userInserts).toHaveLength(4);
     expect(expenseInserts).toHaveLength(7);
+
+    // The four users cover ADMIN, MANAGER, EMPLOYEE, EMPLOYEE (role is the 4th
+    // bound param of the users INSERT).
+    const roles = userInserts.map((c) => c[1][3]);
+    expect(roles).toEqual([Role.ADMIN, Role.MANAGER, Role.EMPLOYEE, Role.EMPLOYEE]);
+
+    // All four share one demo_session_id (the last bound param) and are flagged
+    // is_demo (TRUE is baked into the INSERT SQL).
+    const sessionIds = new Set(userInserts.map((c) => c[1][c[1].length - 1]));
+    expect(sessionIds.size).toBe(1);
+    expect(userInserts.every((c) => /is_demo/.test(c[0]) && /VALUES[^)]*TRUE/.test(c[0]))).toBe(true);
+
     expect(mockedLogger.info).toHaveBeenCalledWith('Created demo workspace', expect.any(Object));
   });
 

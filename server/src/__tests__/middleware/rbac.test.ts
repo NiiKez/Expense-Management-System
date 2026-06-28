@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { authorize } from '../../middleware/rbac';
+import { authorize, denyDemo, demoScope } from '../../middleware/rbac';
 import { Role } from '../../types';
 import { AppError } from '../../utils/errors';
 
@@ -144,5 +144,69 @@ describe('authorize middleware', () => {
     const error = next.mock.calls[0][0] as unknown as AppError;
     expect(error).toBeInstanceOf(AppError);
     expect(error.statusCode).toBe(403);
+  });
+});
+
+describe('denyDemo middleware', () => {
+  let next: jest.MockedFunction<NextFunction>;
+
+  beforeEach(() => {
+    next = jest.fn();
+  });
+
+  it('blocks a demo session with 403 (e.g. on a CSV export route)', () => {
+    const req = mockRequest({
+      id: 9, role: Role.ADMIN, email: 'demo@demo.local', display_name: 'Demo Admin', demoMode: true,
+    });
+
+    denyDemo(req as Request, mockResponse() as Response, next);
+
+    const error = next.mock.calls[0][0] as unknown as AppError;
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe('This action is not available in demo mode');
+  });
+
+  it('passes a real (non-demo) admin through', () => {
+    const req = mockRequest({
+      id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin',
+    });
+
+    denyDemo(req as Request, mockResponse() as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+  });
+});
+
+describe('demoScope helper', () => {
+  it('returns undefined for a real admin (org-wide, unchanged behavior)', () => {
+    const req = mockRequest({
+      id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin',
+    });
+
+    expect(demoScope(req as Request)).toBeUndefined();
+  });
+
+  it('returns the workspace id for a demo session', () => {
+    const req = mockRequest({
+      id: 9, role: Role.ADMIN, email: 'demo@demo.local', display_name: 'Demo Admin',
+      demoMode: true, demoSessionId: 'sess-abc',
+    });
+
+    expect(demoScope(req as Request)).toBe('sess-abc');
+  });
+
+  it('throws 403 for a demo session missing its workspace id (never returns undefined → no leak)', () => {
+    const req = mockRequest({
+      id: 9, role: Role.ADMIN, email: 'demo@demo.local', display_name: 'Demo Admin', demoMode: true,
+    });
+
+    try {
+      demoScope(req as Request);
+      throw new Error('expected demoScope to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AppError);
+      expect((err as AppError).statusCode).toBe(403);
+    }
   });
 });

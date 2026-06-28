@@ -1,4 +1,4 @@
-import { LayoutDashboard, ReceiptText, CheckSquare, Users2, ShieldCheck, Settings } from 'lucide-react'
+import { LayoutDashboard, ReceiptText, Wallet, CheckSquare, Users2, ShieldCheck, Settings } from 'lucide-react'
 import { Role } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -12,6 +12,7 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', testId: 'nav-dashboard', icon: LayoutDashboard, roles: [Role.EMPLOYEE, Role.MANAGER, Role.ADMIN] },
+  { to: '/expenses', label: 'My expenses', testId: 'nav-expenses', icon: Wallet, roles: [Role.EMPLOYEE, Role.MANAGER, Role.ADMIN] },
   { to: '/expenses/new', label: 'New expense', testId: 'nav-file-entry', icon: ReceiptText, roles: [Role.EMPLOYEE] },
   { to: '/approvals', label: 'Approvals', testId: 'nav-approvals', icon: CheckSquare, roles: [Role.MANAGER, Role.ADMIN] },
   { to: '/manager/employees', label: 'Team', testId: 'nav-reports', icon: Users2, roles: [Role.MANAGER] },

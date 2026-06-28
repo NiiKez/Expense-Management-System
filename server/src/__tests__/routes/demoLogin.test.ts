@@ -59,23 +59,35 @@ describe('demoLogin route', () => {
     expect(mockedCreate).not.toHaveBeenCalled();
   });
 
-  it('provisions a workspace and returns a token on success', async () => {
+  const workspace = {
+    sessionId: 'sess-abc',
+    expiresAt: new Date('2026-01-01T00:00:00Z'),
+    usersByRole: { [Role.ADMIN]: 5, [Role.MANAGER]: 7, [Role.EMPLOYEE]: 9 },
+  };
+
+  it('defaults to the MANAGER role and returns a token when no body is sent', async () => {
     mockedIsDemoEnabled.mockReturnValue(true);
     mockedCanCreate.mockResolvedValue(true);
-    mockedCreate.mockResolvedValue({ userId: 7, role: Role.MANAGER, email: 'demo@demo.local', display_name: 'Demo User' });
+    mockedCreate.mockResolvedValue(workspace);
     mockedSign.mockReturnValue('signed.demo.jwt');
     const res = makeRes();
 
     await demoLogin({} as Request, res, next);
 
     expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: { token: 'signed.demo.jwt' },
+    });
+    // The MANAGER workspace user is the one signed.
+    expect(mockedSign).toHaveBeenCalledWith(7, Role.MANAGER);
+    // Issuing a demo session is recorded as a security event for the chosen role.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
       expect.objectContaining({
-        success: true,
-        data: expect.objectContaining({
-          token: 'signed.demo.jwt',
-          user: expect.objectContaining({ id: 7, role: Role.MANAGER }),
-        }),
+        event_type: SecurityEventType.DEMO_SESSION_ISSUED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: 7,
+        role: Role.MANAGER,
       }),
     );
     // Issuing a demo session is recorded as a security event.
@@ -86,6 +98,37 @@ describe('demoLogin route', () => {
         user_id: 7,
       }),
     );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('mints a token for the requested role from the body', async () => {
+    mockedIsDemoEnabled.mockReturnValue(true);
+    mockedCanCreate.mockResolvedValue(true);
+    mockedCreate.mockResolvedValue(workspace);
+    mockedSign.mockReturnValue('signed.admin.jwt');
+    const res = makeRes();
+
+    await demoLogin({ body: { role: 'ADMIN' } } as Request, res, next);
+
+    expect(mockedSign).toHaveBeenCalledWith(5, Role.ADMIN);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: { token: 'signed.admin.jwt' },
+    });
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: 5, role: Role.ADMIN }),
+    );
+  });
+
+  it('falls back to MANAGER when the requested role is invalid', async () => {
+    mockedIsDemoEnabled.mockReturnValue(true);
+    mockedCanCreate.mockResolvedValue(true);
+    mockedCreate.mockResolvedValue(workspace);
+    mockedSign.mockReturnValue('signed.demo.jwt');
+
+    await demoLogin({ body: { role: 'SUPERUSER' } } as Request, makeRes(), next);
+
+    expect(mockedSign).toHaveBeenCalledWith(7, Role.MANAGER);
     expect(next).not.toHaveBeenCalled();
   });
 });

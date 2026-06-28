@@ -28,3 +28,21 @@ export const denyDemo = (req: Request, _res: Response, next: NextFunction): void
   }
   next();
 };
+
+/**
+ * Resolve the demo-workspace scope for a read query.
+ *
+ * Returns the caller's demo_session_id when this is a demo session (so the
+ * model can constrain results to that one workspace), or undefined for a real
+ * admin (whose queries stay org-wide / unchanged). Throws 403 if a demo session
+ * somehow lacks a workspace id — an unscoped admin query must NEVER run for a
+ * demo caller, as that would leak real or other demo workspaces' data.
+ */
+export const demoScope = (req: Request): string | undefined => {
+  if (!req.user?.demoMode) return undefined;
+  const sessionId = req.user.demoSessionId;
+  if (!sessionId) {
+    throw forbidden('This action is not available in demo mode');
+  }
+  return sessionId;
+};

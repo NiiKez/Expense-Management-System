@@ -8,6 +8,7 @@ import logger from '../config/logger';
 import { expenseApprovalsTotal, expenseResolutionSeconds } from '../services/metricsService';
 import { summarizeHttpError } from '../utils/logSanitizer';
 import { getBearerToken, verifyManagerRelationship } from '../services/managerAuthorization';
+import { demoScope } from '../middleware/rbac';
 import { notificationService } from '../services/notificationService';
 import { parsePagination } from '../utils/pagination';
 import { parsePositiveId } from '../utils/requestParsing';
@@ -33,7 +34,15 @@ export const getPendingApprovals = async (req: Request, res: Response, next: Nex
     };
 
     if (req.user!.role === Role.ADMIN) {
-      const result = await expenseModel.findAll({ status: Status.PENDING, page, pageSize });
+      // A demo ADMIN is scoped to its own workspace (demoScope); a real admin
+      // stays org-wide (undefined). Without this a demo admin would see every
+      // real pending expense across the database.
+      const result = await expenseModel.findAll({
+        status: Status.PENDING,
+        page,
+        pageSize,
+        demoSessionId: demoScope(req),
+      });
 
       res.json({
         success: true,

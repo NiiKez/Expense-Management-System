@@ -246,6 +246,8 @@ async function handleDemoAuth(req: Request, next: NextFunction): Promise<boolean
     email: user.email,
     display_name: user.display_name,
     demoMode: true,
+    // Workspace id so read-only admin views can scope to this demo session only.
+    demoSessionId: user.demo_session_id ?? undefined,
   };
   next();
   return true;

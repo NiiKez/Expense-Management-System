@@ -180,6 +180,53 @@ describe('approvalController.getPendingApprovals', () => {
       },
     });
   });
+
+  it('returns org-wide pending approvals for a real admin (unscoped)', async () => {
+    mockedExpenseModel.findAll.mockResolvedValue({ data: [mockExpense()], total: 1 });
+
+    const req = mockRequest({
+      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    expect(mockedExpenseModel.findAll).toHaveBeenCalledWith({
+      status: Status.PENDING,
+      page: 1,
+      pageSize: 20,
+      demoSessionId: undefined,
+    });
+  });
+
+  it('scopes pending approvals to its own workspace for a demo admin', async () => {
+    mockedExpenseModel.findAll.mockResolvedValue({ data: [mockExpense()], total: 1 });
+
+    const req = mockRequest({
+      user: {
+        id: 100,
+        role: Role.ADMIN,
+        email: 'demo.admin@demo.local',
+        display_name: 'Demo Admin',
+        demoMode: true,
+        demoSessionId: 'sess-abc',
+      },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    // Must carry the demo workspace scope so a public demo admin never sees
+    // real (or other-workspace) pending expenses.
+    expect(mockedExpenseModel.findAll).toHaveBeenCalledWith({
+      status: Status.PENDING,
+      page: 1,
+      pageSize: 20,
+      demoSessionId: 'sess-abc',
+    });
+  });
 });
 
 describe('approvalController.approveExpense', () => {

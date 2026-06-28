@@ -67,3 +67,18 @@ describe('Sidebar user chip', () => {
     expect(link).toHaveAttribute('href', '/settings')
   })
 })
+
+describe('Sidebar navigation', () => {
+  it('links to the My expenses list for every role', () => {
+    renderSidebar(Role.MANAGER)
+
+    const link = screen.getByTestId('nav-expenses')
+    expect(link).toHaveAttribute('href', '/expenses')
+  })
+
+  it('does not render a theme toggle (kept in the topbar to avoid duplicates)', () => {
+    renderSidebar()
+
+    expect(screen.queryByTestId('theme-toggle')).not.toBeInTheDocument()
+  })
+})

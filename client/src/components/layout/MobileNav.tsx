@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
@@ -45,6 +46,7 @@ export default function MobileNav({ open, onOpenChange }: MobileNavProps) {
           <SheetTitle className="text-left">
             <Logo />
           </SheetTitle>
+          <SheetDescription className="sr-only">Main navigation</SheetDescription>
         </SheetHeader>
 
         {/* Nav links */}

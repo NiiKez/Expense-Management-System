@@ -247,6 +247,10 @@ declare global {
         // to trust seeded manager_id without Microsoft Graph, and to fence demo
         // sessions out of privileged paths.
         demoMode?: boolean;
+        // The demo session's workspace id (users.demo_session_id). Read-only
+        // admin views use it to scope results to the caller's own demo
+        // workspace, so a demo admin never sees real or other demo data.
+        demoSessionId?: string;
       };
       // Per-request correlation id, set by the request-id middleware and echoed
       // back as the X-Request-Id response header so access logs, error logs, and
