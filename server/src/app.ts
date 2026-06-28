@@ -1,3 +1,5 @@
+import path from 'path';
+import fs from 'fs';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -14,6 +16,7 @@ import healthRoutes from './routes/health';
 import meRoutes from './routes/me';
 import managerRoutes from './routes/manager';
 import notificationRoutes from './routes/notifications';
+import authRoutes from './routes/auth';
 
 const app = express();
 
@@ -130,6 +133,16 @@ const healthLimiter = rateLimit({
   skip: (req) => req.path === '/live',
 });
 
+// Demo workspace creation seeds a whole sandbox, so keep /auth/demo-login on its
+// own tight per-IP budget, independent of the general API limiter.
+const demoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.DEMO_RATE_LIMIT_MAX) || 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { trustProxy: true, xForwardedForHeader: true },
+});
+
 // Prometheus metrics are served on a separate internal listener — see server.ts.
 // Keeping /metrics off the main app prevents it from being exposed to the
 // internet (the main port is public) and removes the auth requirement that
@@ -138,6 +151,7 @@ const healthLimiter = rateLimit({
 // Routes
 app.use('/api/v1/health', healthLimiter, healthRoutes);
 app.use('/api/v1', apiLimiter);
+app.use('/api/v1/auth', demoLimiter, authRoutes); // public: demo-login (no auth)
 app.use('/api/v1/me', meRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/expenses', expenseRoutes);
@@ -145,12 +159,38 @@ app.use('/api/v1/approvals', strictLimiter, approvalRoutes);
 app.use('/api/v1/manager', managerRoutes);
 app.use('/api/v1/admin', strictLimiter, adminRoutes);
 
-// Throttle unmatched routes too. Without apiLimiter here, requests to paths
-// outside /api/v1 (e.g. '/', '/favicon.ico', probes) reach the 404 handler with
-// no rate limit, letting an attacker cheaply flood helmet + body parsing + logging.
-app.use(apiLimiter, (_req, _res, next) => {
+// Unmatched API routes always return a JSON 404 — never the SPA shell. apiLimiter
+// also throttles probes to nonexistent /api paths (helmet + parsing + logging).
+app.use('/api', apiLimiter, (_req, _res, next) => {
   next(notFound('Route'));
 });
+
+// Combined-container deploy: the API also serves the built client. When the
+// bundle is absent (dev/test, or an API-only image) this is skipped and non-API
+// routes fall through to the throttled JSON 404 below (prior behavior).
+const clientDistPath = process.env.CLIENT_DIST_PATH
+  ? path.resolve(process.env.CLIENT_DIST_PATH)
+  : path.join(__dirname, '..', '..', 'client-dist');
+const clientIndexHtml = path.join(clientDistPath, 'index.html');
+
+if (fs.existsSync(clientIndexHtml)) {
+  app.use(express.static(clientDistPath));
+  // SPA fallback: serve index.html for non-API client routes so React Router
+  // can resolve them. Express 5 rejects a bare '*' path, so use a path-less
+  // terminal handler and answer GETs only.
+  app.use(apiLimiter, (req, res, next) => {
+    if (req.method !== 'GET') {
+      next(notFound('Route'));
+      return;
+    }
+    res.sendFile(clientIndexHtml);
+  });
+} else {
+  // No client bundle: throttle and 404 unmatched routes (outside /api/v1 too).
+  app.use(apiLimiter, (_req, _res, next) => {
+    next(notFound('Route'));
+  });
+}
 
 // Global error handler (must be after routes)
 app.use(errorHandler);

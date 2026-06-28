@@ -74,9 +74,13 @@ export async function verifyManagerRelationship(
   // cache bypass is never honored in production even if a stub flag somehow leaks,
   // so authorization no longer rests solely on the server.ts env gate.
   const stubAuth = req.user!.stubAuth === true && process.env.NODE_ENV !== 'production';
+  // Demo sandbox sessions have no Graph-capable token and are fully
+  // self-contained, so the seeded manager_id is authoritative within the
+  // sandbox. Trust it (like stub auth) and skip Graph entirely.
+  const demoMode = req.user!.demoMode === true;
 
   const allowFromDatabaseCache = (): ManagerRelationshipResult => {
-    if (options.allowCachedFallback !== true && !stubAuth) {
+    if (options.allowCachedFallback !== true && !stubAuth && !demoMode) {
       return {
         allowed: false,
         reason: 'Manager relationship could not be verified against Microsoft Graph.',
@@ -88,6 +92,10 @@ export async function verifyManagerRelationship(
       ? { allowed: true }
       : { allowed: false, reason: 'Manager relationship could not be verified from the local cache.' };
   };
+
+  if (demoMode) {
+    return allowFromDatabaseCache();
+  }
 
   const token = getBearerToken(req);
   if (!token) {

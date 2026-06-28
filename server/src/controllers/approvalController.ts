@@ -47,6 +47,12 @@ export const getPendingApprovals = async (req: Request, res: Response, next: Nex
       return;
     }
 
+    // Demo sandbox sessions have no Graph token; serve seeded approvals directly.
+    if (req.user!.demoMode) {
+      await respondFromDatabase('missing_token');
+      return;
+    }
+
     const token = getBearerToken(req);
     if (!token) {
       await respondFromDatabase('missing_token');

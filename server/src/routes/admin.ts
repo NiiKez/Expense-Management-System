@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
-import { authorize } from '../middleware/rbac';
+import { authorize, denyDemo } from '../middleware/rbac';
 import { Role } from '../types';
 import {
   getAuditLogs,
@@ -13,9 +13,10 @@ import { getAdminStats } from '../controllers/statsController';
 
 const router = Router();
 
-// All admin routes require authentication + ADMIN role
+// All admin routes require authentication + ADMIN role, never a demo session.
 router.use(authenticate);
 router.use(authorize([Role.ADMIN]));
+router.use(denyDemo);
 
 // GET /api/v1/admin/expenses — All expenses with filters and pagination
 router.get('/expenses', getAllExpenses);

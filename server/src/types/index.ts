@@ -54,6 +54,11 @@ export interface User {
   role: Role;
   manager_id: number | null;
   is_active: boolean;
+  // Public demo sandbox markers (NULL/false for real Entra users). MySQL returns
+  // BOOLEAN as 0/1, so is_demo is number-or-boolean at runtime — coerce on read.
+  is_demo?: boolean | number;
+  demo_expires_at?: Date | null;
+  demo_session_id?: string | null;
   // In-app preferences (see UserPreferences). MySQL returns BOOLEAN as 0/1, so
   // notify_* are number-or-boolean at runtime — coerce before serializing.
   // Optional in the type so partial test mocks of a row stay valid; a real row
@@ -188,6 +193,10 @@ declare global {
         email: string;
         display_name: string;
         stubAuth?: boolean;
+        // True for a public demo-sandbox session (server-signed demo JWT). Used
+        // to trust seeded manager_id without Microsoft Graph, and to fence demo
+        // sessions out of privileged paths.
+        demoMode?: boolean;
       };
       // Per-request correlation id, set by the request-id middleware and echoed
       // back as the X-Request-Id response header so access logs, error logs, and

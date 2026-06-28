@@ -62,7 +62,8 @@ export const getManagerEmployees = async (req: Request, res: Response, next: Nex
       });
     };
 
-    if (!token) {
+    // Demo sandbox sessions have no Graph token; serve the seeded team directly.
+    if (req.user!.demoMode || !token) {
       await respondFromDatabase('missing_token');
       return;
     }

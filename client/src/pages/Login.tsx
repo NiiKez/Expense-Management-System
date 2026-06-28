@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { IS_STUB_AUTH_MODE } from '../services/env'
+import { IS_DEMO_ENABLED, IS_STUB_AUTH_MODE } from '../services/env'
 import { STUB_USERS } from '../context/stubUsers'
+import api from '../services/api'
+import { storeDemoToken } from '../services/demoAuth'
 import type { Role, User } from '../types'
 import { Avatar, AvatarFallback } from '../components/ui/avatar'
 import { Badge } from '../components/ui/badge'
@@ -26,6 +29,22 @@ const ROLE_BADGE: Record<Role, 'info' | 'secondary' | 'outline'> = {
 
 export default function Login() {
   const { isAuthenticated, isLoading, login } = useAuth()
+  const [demoLoading, setDemoLoading] = useState(false)
+  const [demoError, setDemoError] = useState<string | null>(null)
+
+  const handleDemoLogin = async () => {
+    setDemoError(null)
+    setDemoLoading(true)
+    try {
+      const res = await api.post<{ data: { token: string } }>('/auth/demo-login')
+      storeDemoToken(res.data.data.token)
+      // Full navigation so AuthProvider re-evaluates and mounts the demo session.
+      window.location.assign('/')
+    } catch {
+      setDemoError('Could not start the demo right now. Please try again.')
+      setDemoLoading(false)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -127,14 +146,51 @@ export default function Login() {
                 ))}
               </ul>
             ) : (
-              <Button
-                type="button"
-                data-testid="msal-login"
-                className="w-full"
-                onClick={() => login()}
-              >
-                Sign in with Microsoft
-              </Button>
+              <div className="space-y-3">
+                <Button
+                  type="button"
+                  data-testid="msal-login"
+                  className="w-full"
+                  onClick={() => login()}
+                >
+                  Sign in with Microsoft
+                </Button>
+
+                {IS_DEMO_ENABLED && (
+                  <>
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t border-border" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-background px-2 text-muted-foreground">or</span>
+                      </div>
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      data-testid="demo-login"
+                      className="w-full"
+                      onClick={handleDemoLogin}
+                      disabled={demoLoading}
+                    >
+                      {demoLoading ? (
+                        <>
+                          <Loader2 className="mr-2 size-4 animate-spin" />
+                          Starting demo…
+                        </>
+                      ) : (
+                        'Explore the live demo'
+                      )}
+                    </Button>
+
+                    {demoError && (
+                      <p className="text-center text-xs text-destructive">{demoError}</p>
+                    )}
+                  </>
+                )}
+              </div>
             )}
 
             <p className="text-center text-xs text-muted-foreground lg:hidden">

@@ -9,10 +9,14 @@ import { STUB_USERS } from '../../context/stubUsers'
 // so a single `mockStubAuthMode` flag flips it per test, exercising both the
 // stub-user-list branch and the Microsoft-login-button branch.
 let mockStubAuthMode = true
+let mockDemoEnabled = false
 jest.mock('../../services/env', () => ({
   __esModule: true,
   get IS_STUB_AUTH_MODE() {
     return mockStubAuthMode
+  },
+  get IS_DEMO_ENABLED() {
+    return mockDemoEnabled
   },
 }))
 
@@ -21,6 +25,13 @@ jest.mock('../../services/env', () => ({
 jest.mock('../../context/AuthContext', () => ({
   __esModule: true,
   useAuth: jest.fn(),
+}))
+
+// Login imports the axios client directly (for demo-login). Mock it so the
+// transitive MSAL import (which needs WebCrypto, absent in jsdom) never loads.
+jest.mock('../../services/api', () => ({
+  __esModule: true,
+  default: { post: jest.fn().mockResolvedValue({ data: { data: { token: 'demo-token' } } }) },
 }))
 
 import { useAuth } from '../../context/AuthContext'
@@ -37,6 +48,7 @@ function setAuth(overrides: Parameters<typeof makeMockAuthValue>[0] = {}) {
 beforeEach(() => {
   jest.clearAllMocks()
   mockStubAuthMode = true
+  mockDemoEnabled = false
 })
 
 describe('Login', () => {
@@ -123,6 +135,26 @@ describe('Login', () => {
 
       expect(auth.login).toHaveBeenCalledTimes(1)
       expect(auth.login).toHaveBeenCalledWith()
+    })
+
+    it('shows the demo entry point only when demo mode is enabled', () => {
+      mockStubAuthMode = false
+      mockDemoEnabled = true
+      setAuth()
+
+      renderWithProviders(<Login />)
+
+      expect(screen.getByTestId('demo-login')).toBeInTheDocument()
+    })
+
+    it('hides the demo entry point when demo mode is disabled', () => {
+      mockStubAuthMode = false
+      mockDemoEnabled = false
+      setAuth()
+
+      renderWithProviders(<Login />)
+
+      expect(screen.queryByTestId('demo-login')).not.toBeInTheDocument()
     })
   })
 })

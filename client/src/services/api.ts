@@ -3,6 +3,7 @@ import { InteractionRequiredAuthError } from '@azure/msal-browser';
 import { msalInstance, loginRequest } from './auth';
 import { API_BASE_URL, IS_STUB_AUTH_MODE } from './env';
 import { getStoredStubUserId } from './stubAuth';
+import { clearDemoToken, getStoredDemoToken } from './demoAuth';
 
 // Why no default Content-Type: setting application/json here makes axios call
 // formDataToJSON() on FormData payloads (turning File parts into "{}"), which
@@ -14,6 +15,14 @@ const api = axios.create({
 });
 
 api.interceptors.request.use(async (config) => {
+  // Demo session takes precedence: a server-signed demo JWT, sent like any
+  // bearer token. Production-safe and independent of MSAL/stub.
+  const demoToken = getStoredDemoToken();
+  if (demoToken) {
+    config.headers.Authorization = `Bearer ${demoToken}`;
+    return config;
+  }
+
   if (IS_STUB_AUTH_MODE) {
     const stubUserId = getStoredStubUserId();
     if (stubUserId) {
@@ -50,7 +59,20 @@ let redirectInFlight = false;
 api.interceptors.response.use(
   (response) => response,
   async (err) => {
-    if (!IS_STUB_AUTH_MODE && err?.response?.status === 401 && !redirectInFlight) {
+    const status = err?.response?.status;
+
+    // Demo sessions can't silently re-auth. If the token expired or its
+    // workspace was reaped, clear it and return to the login screen.
+    if (getStoredDemoToken()) {
+      if (status === 401) {
+        clearDemoToken();
+        window.location.assign('/login');
+        return new Promise(() => {});
+      }
+      return Promise.reject(err);
+    }
+
+    if (!IS_STUB_AUTH_MODE && status === 401 && !redirectInFlight) {
       redirectInFlight = true;
       try {
         await msalInstance.acquireTokenRedirect(loginRequest);
