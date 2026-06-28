@@ -22,14 +22,20 @@ const app = express();
 
 app.disable('x-powered-by');
 
-// Security headers, tuned for a JSON API that also serves file downloads. The
-// API renders no HTML, so lock the CSP down to 'none' (defense-in-depth should a
-// response ever be rendered) and forbid framing (clickjacking). CORP is relaxed
-// to same-site so the SPA on a sibling subdomain can load API-served assets.
+// Security headers. In the combined single-image deploy this app also serves the
+// built SPA (index.html), so the CSP governs the page itself — not just JSON
+// responses. Keep a strict default-src 'none', but allow the SPA to reach its own
+// origin (connect-src 'self' — required for every XHR/fetch, including the public
+// demo) and let MSAL talk to Entra for sign-in (token/metadata over connect-src,
+// the silent-token iframe over frame-src). Bundled JS/CSS are same-origin, so
+// helmet's default script/style/img/font directives still apply. CORP stays
+// same-site so API-served assets load; framing is forbidden (clickjacking).
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'none'"],
+      connectSrc: ["'self'", 'https://login.microsoftonline.com'],
+      frameSrc: ['https://login.microsoftonline.com'],
       frameAncestors: ["'none'"],
       objectSrc: ["'none'"],
     },
