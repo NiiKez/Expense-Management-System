@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import type { Expense } from '../../types'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { formatCurrency, formatCategory, formatRelativeTime } from '@/lib/format'
+import { formatCurrency, formatCategory, formatDate, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Check, X } from 'lucide-react'
 
@@ -91,7 +91,7 @@ export default function ApprovalCard({ expense, onApprove, onReject }: ApprovalC
             <span aria-hidden>·</span>
             <span>{formatCategory(expense.category)}</span>
             <span aria-hidden>·</span>
-            <span title={`Filed ${formatRelativeTime(expense.created_at)}`}>
+            <span title={`Incurred ${formatDate(expense.expense_date)}`}>
               {formatRelativeTime(expense.expense_date)}
             </span>
           </div>

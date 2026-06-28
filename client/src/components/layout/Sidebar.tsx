@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { navItemsForRole, navItemClass } from './navConfig'
 import Logo from './Logo'
-import ThemeToggle from './ThemeToggle'
 
 function initials(name: string) {
   return name
@@ -80,7 +79,6 @@ export default function Sidebar() {
               </Badge>
             </div>
           </Link>
-          <ThemeToggle />
         </div>
         <Button
           type="button"
