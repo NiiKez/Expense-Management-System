@@ -1,0 +1,8 @@
+{
+  // Production build config. Extends the base tsconfig (which the editor/IDE uses
+  // and which intentionally includes tests + jest config so their `jest`/`describe`
+  // globals resolve) but excludes everything test-related so `tsc` only emits the
+  // application code into dist/.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/__tests__", "jest.config.ts", "jest.integration.config.ts"]
+}
