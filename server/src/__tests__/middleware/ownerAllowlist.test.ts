@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { authenticate } from '../../middleware/auth';
-import { Role } from '../../types';
+import { Role, SecurityEventType, SecurityOutcome } from '../../types';
 import { userModel } from '../../models/user';
+import { securityEventModel } from '../../models/securityEvent';
 
 jest.mock('jsonwebtoken');
 jest.mock('../../models/user', () => ({
@@ -12,9 +13,13 @@ jest.mock('../../models/user', () => ({
     findById: jest.fn(),
   },
 }));
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
 
 const mockedJwt = jwt as jest.Mocked<typeof jwt>;
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 
 function reqWithBearer(): Request {
   return {
@@ -66,6 +71,9 @@ describe('authenticate owner allowlist (OWNER_OIDS)', () => {
 
     expect(next).toHaveBeenCalledWith();
     expect(req.user).toMatchObject({ id: 1, role: Role.ADMIN });
+    // Happy path: the stored role already matches the token, so no security
+    // event is recorded — proves we never write a row on the success path.
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
   });
 
   it('rejects a user whose oid is not in OWNER_OIDS', async () => {
@@ -79,6 +87,14 @@ describe('authenticate owner allowlist (OWNER_OIDS)', () => {
     expect(err.statusCode).toBe(403);
     expect(req.user).toBeUndefined();
     expect(mockedUserModel.upsertByEntraId).not.toHaveBeenCalled();
+    // The allowlist rejection is recorded as an ACCESS_DENIED security event.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: SecurityEventType.ACCESS_DENIED,
+        outcome: SecurityOutcome.FAILURE,
+        entra_oid: 'intruder-oid',
+      }),
+    );
   });
 
   it('allows any valid user when OWNER_OIDS is unset (default behavior)', async () => {

@@ -254,3 +254,39 @@ BEGIN
 END$$
 
 DELIMITER ;
+
+-- ============================================================
+-- SECURITY EVENTS
+-- Durable, queryable trail of authentication / authorization and privileged-
+-- admin events: failed logins, owner-allowlist rejections, role changes, dev
+-- stub + public demo session use, and audit-log exports. audit_logs cannot hold
+-- these — it requires both an expense (FK) and a known performing user (FK), but
+-- a security event may have no expense and a failed login has no user row at all.
+-- Rows are written best-effort by the application (a logging-table outage must
+-- never break auth) and mirrored to a stable, machine-parseable stdout log line
+-- that alert rules key off. No tokens or secrets are ever stored here.
+-- ============================================================
+CREATE TABLE security_events (
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    event_type      VARCHAR(64)     NOT NULL,                   -- AUTH_FAILURE, ACCESS_DENIED, ROLE_CHANGED, STUB_AUTH_USED, DEMO_SESSION_ISSUED, AUDIT_LOG_EXPORTED
+    outcome         ENUM('SUCCESS', 'FAILURE')
+                                    NOT NULL,
+    user_id         INT UNSIGNED    NULL,                       -- FK -> users.id; NULL when no resolved user (e.g. failed login)
+    entra_oid       VARCHAR(36)     NULL,                       -- Entra Object ID from the token subject, when available
+    role            VARCHAR(16)     NULL,                       -- resolved role at the time of the event
+    ip_address      VARCHAR(45)     NULL,                       -- IPv4 or IPv6
+    request_id      VARCHAR(200)    NULL,                       -- correlation id (X-Request-Id)
+    detail          VARCHAR(255)    NULL,                       -- short human-readable reason; NO secrets
+    metadata        JSON            NULL,                       -- freeform structured context
+    created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    KEY idx_sec_event_type (event_type),
+    KEY idx_sec_user (user_id),
+    KEY idx_sec_created (created_at),
+
+    -- SET NULL (not RESTRICT) so deleting a user — e.g. reaping an expired demo
+    -- workspace — never blocks, and the security history outlives the user row.
+    CONSTRAINT fk_sec_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE SET NULL
+) ENGINE=InnoDB;

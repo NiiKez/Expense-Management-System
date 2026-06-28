@@ -2,7 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { isDemoEnabled } from '../config/demo';
 import { canCreateDemoWorkspace, createDemoWorkspace, signDemoToken } from '../services/demoService';
 import { AppError, forbidden } from '../utils/errors';
-import logger from '../config/logger';
+import { securityEventModel } from '../models/securityEvent';
+import { SecurityEventType, SecurityOutcome } from '../types';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ const router = Router();
  * (and DEMO_JWT_SECRET is set). The token is then sent as a normal
  * `Authorization: Bearer <token>` and recognized by the auth middleware.
  */
-export const demoLogin = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const demoLogin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     if (!isDemoEnabled()) {
       next(forbidden('Demo mode is not enabled'));
@@ -29,7 +30,15 @@ export const demoLogin = async (_req: Request, res: Response, next: NextFunction
     const workspace = await createDemoWorkspace();
     const token = signDemoToken(workspace.userId, workspace.role);
 
-    logger.info('Demo session issued', { userId: workspace.userId });
+    await securityEventModel.record({
+      event_type: SecurityEventType.DEMO_SESSION_ISSUED,
+      outcome: SecurityOutcome.SUCCESS,
+      user_id: workspace.userId,
+      role: workspace.role,
+      ip_address: req.ip ?? null,
+      request_id: req.id ?? null,
+      detail: 'Public demo workspace provisioned',
+    });
 
     res.status(201).json({
       success: true,

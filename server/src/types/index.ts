@@ -42,6 +42,23 @@ export enum NotificationType {
   EXPENSE_COMMENT = 'EXPENSE_COMMENT',
 }
 
+// Stable, machine-parseable codes for the durable security-event trail. These
+// double as the `event` field on the structured log line that alert rules key
+// off, so the string values must stay stable once shipped.
+export enum SecurityEventType {
+  AUTH_FAILURE = 'AUTH_FAILURE',               // JWT verification failed
+  ACCESS_DENIED = 'ACCESS_DENIED',             // OWNER_OIDS allowlist rejection
+  ROLE_CHANGED = 'ROLE_CHANGED',               // synced DB role actually changed
+  STUB_AUTH_USED = 'STUB_AUTH_USED',           // dev-only stub identity issued
+  DEMO_SESSION_ISSUED = 'DEMO_SESSION_ISSUED', // public demo workspace provisioned
+  AUDIT_LOG_EXPORTED = 'AUDIT_LOG_EXPORTED',   // admin exported the audit-log CSV
+}
+
+export enum SecurityOutcome {
+  SUCCESS = 'SUCCESS',
+  FAILURE = 'FAILURE',
+}
+
 // ============================================================
 // Interfaces
 // ============================================================
@@ -143,6 +160,39 @@ export interface AuditLog {
   details: Record<string, unknown> | null;
   ip_address: string | null;
   created_at: Date;
+}
+
+// Durable, queryable trail of auth/authorization and privileged-admin events.
+// Unlike audit_logs (tied to an expense AND a known performing user), a security
+// event may have neither — a failed login never reaches a user row. user_id is
+// FK -> users.id with ON DELETE SET NULL, so reaping a user keeps the history.
+export interface SecurityEvent {
+  id: number;
+  event_type: SecurityEventType | string;
+  outcome: SecurityOutcome;
+  user_id: number | null;
+  entra_oid: string | null;
+  role: string | null;
+  ip_address: string | null;
+  request_id: string | null;
+  detail: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: Date;
+}
+
+// What callers hand to securityEventModel.record(). Only the event type and
+// outcome are required; everything else is contextual. Recording is best-effort
+// and never throws into the request path, so call sites stay terse.
+export interface SecurityEventInput {
+  event_type: SecurityEventType;
+  outcome: SecurityOutcome;
+  user_id?: number | null;
+  entra_oid?: string | null;
+  role?: Role | string | null;
+  ip_address?: string | null;
+  request_id?: string | null;
+  detail?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 // ============================================================

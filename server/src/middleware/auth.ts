@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import jwksRsa from 'jwks-rsa';
-import { Role } from '../types';
+import { Role, SecurityEventType, SecurityOutcome } from '../types';
 import { entraConfig } from '../config/entra';
 import { forbidden, unauthorized } from '../utils/errors';
 import logger from '../config/logger';
 import { userModel } from '../models/user';
+import { securityEventModel } from '../models/securityEvent';
 import { getDemoSecret, isDemoEnabled } from '../config/demo';
 
 // JWKS client — caches signing keys from Entra ID.
@@ -166,7 +167,15 @@ async function handleStubAuth(req: Request, next: NextFunction): Promise<boolean
     stubAuth: true,
   };
 
-  logger.debug('Stub auth: authenticated as user', { userId: user.id, role: user.role });
+  await securityEventModel.record({
+    event_type: SecurityEventType.STUB_AUTH_USED,
+    outcome: SecurityOutcome.SUCCESS,
+    user_id: user.id,
+    role: user.role,
+    ip_address: req.ip ?? null,
+    request_id: req.id ?? null,
+    detail: 'Dev stub auth issued an identity',
+  });
   next();
   return true;
 }
@@ -284,7 +293,15 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       .map((oid) => oid.trim())
       .filter(Boolean);
     if (ownerOids.length > 0 && !ownerOids.includes(decoded.oid)) {
-      logger.warn('Rejected login: object id not in OWNER_OIDS allowlist', { oid: decoded.oid });
+      await securityEventModel.record({
+        event_type: SecurityEventType.ACCESS_DENIED,
+        outcome: SecurityOutcome.FAILURE,
+        entra_oid: decoded.oid,
+        role: entraRole,
+        ip_address: req.ip ?? null,
+        request_id: req.id ?? null,
+        detail: 'Object id not in OWNER_OIDS allowlist',
+      });
       next(forbidden('Access is restricted to the application owner'));
       return;
     }
@@ -302,10 +319,23 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
     });
 
     if (user.role !== entraRole) {
-      // Entra ID role changed — sync to DB
+      // Entra ID role changed — sync to DB (Entra is the source of truth) and
+      // record it. Guarded by the inequality above, so this fires only on a real
+      // role change, never on the per-request success path.
+      const previousRole = user.role;
       const synced = await userModel.updateRole(user.id, entraRole);
       if (synced) user = synced;
-      logger.debug('Synced role from Entra ID', { userId: user.id, newRole: entraRole });
+      await securityEventModel.record({
+        event_type: SecurityEventType.ROLE_CHANGED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: user.id,
+        entra_oid: decoded.oid,
+        role: entraRole,
+        ip_address: req.ip ?? null,
+        request_id: req.id ?? null,
+        detail: `Role changed from ${previousRole} to ${entraRole}`,
+        metadata: { old_role: previousRole, new_role: entraRole },
+      });
     }
 
     if (!user.is_active) {
@@ -322,8 +352,16 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
 
     next();
   } catch (err) {
+    // JWT error messages (e.g. "jwt expired", "invalid signature") carry no
+    // secrets; the model clamps detail to the column width regardless.
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn('JWT verification failed', { error: message });
+    await securityEventModel.record({
+      event_type: SecurityEventType.AUTH_FAILURE,
+      outcome: SecurityOutcome.FAILURE,
+      ip_address: req.ip ?? null,
+      request_id: req.id ?? null,
+      detail: message,
+    });
     next(unauthorized('Invalid or expired token'));
   }
 };

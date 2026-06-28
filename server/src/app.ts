@@ -91,15 +91,42 @@ app.use((req, res, next) => {
   next();
 });
 
-// Request logging — correlate each access log line with the request id, without
-// dumping request/response headers or bodies into the logs.
+// Static assets the SPA serves in bulk — a single page load fans out to dozens of
+// these. Matching on file extension lets the skip() below drop only the successful
+// ones from the access log.
+const STATIC_ASSET_RE = /\.(?:js|css|map|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|txt)$/i;
+
+// Request logging — correlate each access log line with the request id (and, once
+// auth has run, the authenticated user), without dumping request/response headers
+// or bodies into the logs.
 app.use(expressWinston.logger({
   winstonInstance: logger,
   meta: true,
   expressFormat: true,
   requestWhitelist: [],
   responseWhitelist: [],
-  dynamicMeta: (req) => ({ requestId: req.id }),
+  // Severity tracks HTTP status so alerts/queries key off log level instead of
+  // parsing the status code: 5xx => error, 4xx => warn, everything else => info.
+  level: (_req, res) => {
+    if (res.statusCode >= 500) return 'error';
+    if (res.statusCode >= 400) return 'warn';
+    return 'info';
+  },
+  // Drop only SUCCESSFUL noise. Otherwise every static-asset fetch and every
+  // liveness/readiness probe becomes an ingested Log Analytics line (cost + noise).
+  // The `< 400` guard means a failing asset or health request is STILL logged, so
+  // we never hide failures behind the filter.
+  skip: (req, res) =>
+    res.statusCode < 400 &&
+    (req.path.startsWith('/api/v1/health') || STATIC_ASSET_RE.test(req.path)),
+  // dynamicMeta is evaluated at response 'finish'. This logger is registered before
+  // the auth middleware, but by the time the response finishes auth has populated
+  // req.user — so the id/role attach here. Internal id/role only: no email, no token.
+  dynamicMeta: (req) => ({
+    requestId: req.id,
+    userId: req.user?.id,
+    role: req.user?.role,
+  }),
 }));
 
 // Body parsing

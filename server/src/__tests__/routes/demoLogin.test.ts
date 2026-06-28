@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { demoLogin } from '../../routes/auth';
 import { isDemoEnabled } from '../../config/demo';
 import { canCreateDemoWorkspace, createDemoWorkspace, signDemoToken } from '../../services/demoService';
-import { Role } from '../../types';
+import { securityEventModel } from '../../models/securityEvent';
+import { Role, SecurityEventType, SecurityOutcome } from '../../types';
 
 jest.mock('../../config/demo', () => ({
   isDemoEnabled: jest.fn(),
@@ -12,11 +13,15 @@ jest.mock('../../services/demoService', () => ({
   createDemoWorkspace: jest.fn(),
   signDemoToken: jest.fn(),
 }));
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
 
 const mockedIsDemoEnabled = isDemoEnabled as jest.MockedFunction<typeof isDemoEnabled>;
 const mockedCanCreate = canCreateDemoWorkspace as jest.MockedFunction<typeof canCreateDemoWorkspace>;
 const mockedCreate = createDemoWorkspace as jest.MockedFunction<typeof createDemoWorkspace>;
 const mockedSign = signDemoToken as jest.MockedFunction<typeof signDemoToken>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 
 function makeRes(): Response {
   const res = {} as Response;
@@ -71,6 +76,14 @@ describe('demoLogin route', () => {
           token: 'signed.demo.jwt',
           user: expect.objectContaining({ id: 7, role: Role.MANAGER }),
         }),
+      }),
+    );
+    // Issuing a demo session is recorded as a security event.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: SecurityEventType.DEMO_SESSION_ISSUED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: 7,
       }),
     );
     expect(next).not.toHaveBeenCalled();
