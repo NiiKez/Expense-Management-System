@@ -129,15 +129,19 @@ function MsalAuthProvider({ children }: { children: ReactNode }) {
 // Demo sandbox session: authentication is simply "we hold a demo token and /me
 // resolves". No MSAL involvement; logout clears the token.
 function DemoAuthProvider({ children }: { children: ReactNode }) {
-  const queryClient = useQueryClient();
   const { data, isLoading, isError } = useMe({ enabled: true });
   const user: User | null = !isError ? data ?? null : null;
 
   const logout = useCallback(() => {
-    queryClient.removeQueries({ queryKey: ['me'] });
+    // Clear the session, then hard-navigate so the SPA tears down at once.
+    // Without the navigation the still-mounted /me query refetches with the
+    // token already gone, 401s, and the api interceptor — no longer seeing a
+    // demo token — falls through to MSAL's acquireTokenRedirect, bouncing the
+    // user through login.microsoftonline.com before they land on /login.
     clearDemoToken();
     clearStoredActiveRole();
-  }, [queryClient]);
+    window.location.assign('/login');
+  }, []);
 
   // Demo sessions hold a single role, so the switcher never renders; the no-op
   // just satisfies the context shape.

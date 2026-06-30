@@ -105,7 +105,9 @@ export default function Login() {
               <p className="text-sm text-muted-foreground">
                 {IS_STUB_AUTH_MODE
                   ? 'Development mode — select an account to continue.'
-                  : 'Use your organization account to continue.'}
+                  : IS_DEMO_ENABLED
+                    ? 'Explore the live demo — pick a role to tour the app. No account needed.'
+                    : 'Use your organization account to continue.'}
               </p>
             </div>
 
@@ -123,40 +125,58 @@ export default function Login() {
                   if (user) handleStubLogin(user)
                 }}
               />
-            ) : (
-              <div className="space-y-3">
-                <Button
-                  type="button"
-                  data-testid="msal-login"
-                  className="w-full"
-                  onClick={() => login()}
-                >
-                  Sign in with Microsoft
-                </Button>
+            ) : IS_DEMO_ENABLED ? (
+              // Public demo: the persona picker is the primary path (it works for
+              // any visitor). Microsoft sign-in is single-tenant and only the
+              // project owner's org can pass it, so it's demoted to a secondary,
+              // clearly-labeled option below the divider.
+              <div className="space-y-5">
+                <AccountPicker
+                  accounts={DEMO_ACCOUNTS}
+                  onSelect={(account) => handleDemoLogin(account.role)}
+                  pendingKey={demoPending}
+                />
 
-                {IS_DEMO_ENABLED && (
-                  <>
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-border" />
-                      </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-background px-2 text-muted-foreground">or</span>
-                      </div>
-                    </div>
-
-                    <AccountPicker
-                      accounts={DEMO_ACCOUNTS}
-                      onSelect={(account) => handleDemoLogin(account.role)}
-                      pendingKey={demoPending}
-                    />
-
-                    {demoError && (
-                      <p className="text-center text-xs text-destructive">{demoError}</p>
-                    )}
-                  </>
+                {demoError && (
+                  <p className="text-center text-xs text-destructive">{demoError}</p>
                 )}
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-background px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Project owner / staff
+                  </p>
+                  <Button
+                    type="button"
+                    data-testid="msal-login"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => login()}
+                  >
+                    Sign in with Microsoft
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Restricted to the project owner's organization.
+                  </p>
+                </div>
               </div>
+            ) : (
+              <Button
+                type="button"
+                data-testid="msal-login"
+                className="w-full"
+                onClick={() => login()}
+              >
+                Sign in with Microsoft
+              </Button>
             )}
 
             <p className="text-center text-xs text-muted-foreground lg:hidden">

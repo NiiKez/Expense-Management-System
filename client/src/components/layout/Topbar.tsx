@@ -133,10 +133,7 @@ export default function Topbar({ title }: TopbarProps) {
           <button
             type="button"
             data-testid="demo-exit"
-            onClick={() => {
-              logout()
-              window.location.assign('/login')
-            }}
+            onClick={() => logout()}
             className="font-medium underline underline-offset-2 hover:no-underline"
           >
             Exit demo
