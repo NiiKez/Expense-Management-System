@@ -1,5 +1,7 @@
 # Expense Management
 
+**Live demo → [expenses.prodstack.live](https://expenses.prodstack.live)** — the demo runs on scale-to-zero infrastructure, so the first request after it has been idle can take a few seconds to wake the app. That brief cold start is expected, not a fault — just give it a moment.
+
 A full-stack expense management system: employees submit expenses, managers approve or reject them, and admins have organisation-wide oversight. Authentication is delegated to Microsoft Entra ID; the manager hierarchy is sourced from Microsoft Graph.
 
 - **Backend** — Express 4 + TypeScript, MySQL 8, Entra ID JWT auth (`jwks-rsa`), Zod validation, structured Winston JSON logs with secret redaction, Prometheus metrics on a separate internal listener.
@@ -64,7 +66,7 @@ Each workspace (`server/`, `client/`, `e2e/`) has its own `package.json` and is 
 The same build serves three audiences, all gated by env:
 
 - **Owner only (production):** restrict sign-in to a single user — assign the Entra app role to just that account and/or set `OWNER_OIDS` (comma-separated Entra object ids) on the API. Anyone else is rejected with 403.
-- **Public demo:** set `ENABLE_DEMO=true` + `DEMO_JWT_SECRET=<random>` (API) and `VITE_ENABLE_DEMO=true` (client). Visitors launch an isolated, seeded sandbox (a manager with a team and sample expenses) via a server-signed session token and exercise the full submit/approve/reject flow without ever touching real data. Workspaces auto-expire (`DEMO_SESSION_TTL_SECONDS`, default 2h), are reaped on a timer, and are capped by `DEMO_MAX_ACTIVE`. This path is entirely separate from dev stub auth.
+- **Public demo:** set `ENABLE_DEMO=true` + `DEMO_JWT_SECRET=<random>` (API) and `VITE_ENABLE_DEMO=true` (client). Visitors pick a persona (admin / manager / employee) and launch an isolated, seeded sandbox — its own admin, manager, two employees, and sample expenses — via a server-signed session token, then exercise the full submit/approve/reject flow without ever touching real data. Workspaces auto-expire (`DEMO_SESSION_TTL_SECONDS`, default 2h), are reaped on a timer (every 15 min), and are capped by `DEMO_MAX_ACTIVE` (default 50; further launches get a `503` until one expires). This path is entirely separate from dev stub auth.
 
 ### Single-image deploy
 
@@ -117,7 +119,7 @@ cd server
 npm install
 npm run dev          # nodemon + ts-node, hot-reloads on changes
 npm run build        # tsc → dist/
-npm test             # jest --forceExit --detectOpenHandles
+npm test             # jest --detectOpenHandles
 npm run lint
 ```
 With MySQL up (see above), `npm run dev` should log `MySQL pool connected`. The API listens on `PORT` (default `3000`). When running on bare Node, `METRICS_HOST` defaults to `127.0.0.1`; Compose overrides it to `0.0.0.0` so Prometheus on the internal network can scrape.
@@ -137,6 +139,7 @@ The client reads its own `VITE_*` env vars from `client/.env` (template in `clie
 - `VITE_AUTH_MODE` — `msal` (Entra ID, default) or `stub` (localhost-only test login)
 - `VITE_API_URL` — backend base URL; point this at the running API (e.g. `http://localhost:3000/api/v1`). HTTPS is enforced unless the host is localhost. *(The shipped `.env.example` default is `http://localhost:4444/api/v1`; change it to match your server's `PORT`.)*
 - `VITE_ENTRA_CLIENT_ID`, `VITE_ENTRA_TENANT_ID`, `VITE_REDIRECT_URI` — MSAL config (required for real auth; ignored in stub mode)
+- `VITE_ENABLE_DEMO` — `true` exposes the public demo launcher on the login page (pairs with the API's `ENABLE_DEMO`)
 
 In stub mode (`VITE_AUTH_MODE=stub`, localhost only) the login page lists the seeded users and signs in via an `X-Stub-User-Id` header instead of MSAL — this is the path Playwright drives.
 
@@ -148,7 +151,7 @@ In stub mode (`VITE_AUTH_MODE=stub`, localhost only) the login page lists the se
 - **API** — `PORT`, `NODE_ENV`, `LOG_LEVEL`, `CORS_ORIGIN` (comma-separated allowlist), `JSON_BODY_LIMIT` (default 100 kB)
 - **Metrics** — `METRICS_PORT`, `METRICS_HOST`
 - **Proxying** — `TRUST_PROXY_HOPS` (set to the exact number of proxies in front of the API; using `true` would let any client spoof `X-Forwarded-For`). `TRUST_PROXY=true` is a coarse fallback (one hop) when the hop count is unset.
-- **Rate limits** (per 15 min unless noted) — `API_RATE_LIMIT_MAX` (1000), `STRICT_RATE_LIMIT_MAX` (100, applied to `/approvals` and `/admin`), `UPLOAD_RATE_LIMIT_MAX` (20, per-user on `POST /expenses`), `HEALTH_RATE_LIMIT_MAX` (60/min)
+- **Rate limits** (per 15 min unless noted) — `API_RATE_LIMIT_MAX` (1000), `STRICT_RATE_LIMIT_MAX` (100, applied to `/approvals` and `/admin`), `UPLOAD_RATE_LIMIT_MAX` (20, per-user on `POST /expenses`), `DEMO_RATE_LIMIT_MAX` (10, per-IP on `POST /auth/demo-login`), `HEALTH_RATE_LIMIT_MAX` (60/min)
 - **Entra ID** — `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` (optional, Graph OBO only), `ENTRA_TOKEN_AUDIENCE` (optional override of accepted audiences; defaults to `api://{clientId}` and `{clientId}`)
 - **Microsoft Graph** (manager hierarchy, org profile attributes and group memberships via OBO; requires the delegated permissions `User.Read.All` and `GroupMember.Read.All`) — `GRAPH_TIMEOUT_MS` (per-call timeout, default 10000); `GRAPH_RETRY_ATTEMPTS` (3) / `GRAPH_RETRY_BASE_MS` (250) / `GRAPH_RETRY_MAX_DELAY_MS` (4000) tune the throttling-aware retry that honours `Retry-After` on 429/5xx; `GRAPH_MAX_PAGES` (50) caps direct-report pagination, `GRAPH_MAX_GROUP_PAGES` (20) caps group-membership pagination, `GRAPH_MAX_CHAIN_DEPTH` (10) bounds the reporting-line walk
 - **Stub auth** — `ALLOW_STUB_AUTH=true` enables a loopback-only test login path used by Playwright (also requires `NODE_ENV=development`). The server refuses to boot if this is set outside development. Never set it in production.
@@ -160,18 +163,20 @@ Never commit `.env`, `.npmrc`, certificates, private keys, database dumps, or Do
 
 ## Database
 
-Schema lives in `database/schema.sql`. Six tables (all InnoDB):
+Schema lives in `database/schema.sql`. Eight tables (all InnoDB):
 
-- `users` — Entra-synced (`entra_id` unique), `role` ENUM (`EMPLOYEE` / `MANAGER` / `ADMIN`), self-referencing `manager_id` (ON DELETE SET NULL), `is_active` flag, plus self-service preference columns (`default_currency`, `notify_on_submission`, `notify_on_decision`, `notify_on_comment`)
+- `users` — Entra-synced (`entra_id` unique), `role` ENUM (`EMPLOYEE` / `MANAGER` / `ADMIN`), self-referencing `manager_id` (ON DELETE SET NULL), `is_active` flag, Graph-synced org attributes (`department`, `job_title`, `employee_id`, `office_location`), self-service preference columns (`default_currency`, `notify_on_submission`, `notify_on_decision`, `notify_on_comment`), and demo-sandbox columns (`is_demo`, `demo_expires_at`, `demo_session_id`)
+- `user_groups` — per-user Entra group memberships synced from Microsoft Graph
 - `expenses` — `amount` DECIMAL(10,2) with a `CHECK (amount > 0)` (max 99,999,999.99), `currency`, `category` ENUM, `status` ENUM, `version` (optimistic concurrency), soft-delete columns (`deleted_at`, `deleted_by`), and a conditional CHECK requiring `rejection_reason` when status is `REJECTED`
 - `receipts` — file metadata, FK to `expenses` with CASCADE
 - `comments` — discussion thread on an expense (submitter ↔ approver), FK to `expenses` with CASCADE
 - `notifications` — per-user in-app notifications (no email), generated on lifecycle events + comments; FK to `expenses` with CASCADE
-- `audit_logs` — append-only (UPDATE/DELETE blocked by triggers `trg_audit_logs_no_update` / `trg_audit_logs_no_delete`), FK to `expenses` with RESTRICT — expense deletion is therefore soft and handled transactionally in the expense model. The `action` ENUM includes `RESUBMITTED` for the reject→fix→resubmit flow.
+- `audit_logs` — append-only (UPDATE/DELETE blocked by triggers `trg_audit_logs_no_update` / `trg_audit_logs_no_delete`, the latter making a narrow exception for reaped demo rows), FK to `expenses` with RESTRICT — expense deletion is therefore soft and handled transactionally in the expense model. The `action` ENUM includes `RESUBMITTED` for the reject→fix→resubmit flow.
+- `security_events` — durable trail of auth/authorization and privileged-admin events (failed logins, owner-allowlist rejections, role changes, demo/stub sessions, audit-log exports); survives scale-to-zero and the log-retention window
 
 Stored procedures (`database/stored-procedures.sql`) — `sp_approve_expense`, `sp_reject_expense`, `sp_override_expense`, `sp_get_team_expenses`, `sp_delete_expense`, and `sp_submit_expense` — are all loaded by Compose. Approve and reject run through `sp_approve_expense` / `sp_reject_expense` (which perform the optimistic-concurrency `version` check inside the proc); the remaining four are currently unused — those flows (team listing, override, soft-delete, submit) use inline SQL in transactions instead.
 
-`database/migrations/` holds dated, manually-applied additive SQL (not a migration framework): one migration adds the `comments`/`notifications` tables and the `RESUBMITTED` audit action; another adds the user preference columns. Both are already folded into `schema.sql`, so a fresh database built from `schema.sql` needs neither.
+`database/migrations/` holds dated, manually-applied additive SQL (not a migration framework): the `comments`/`notifications` tables + `RESUBMITTED` audit action, the user preference columns, the demo-sandbox columns and trigger, the `security_events` table, and the Graph org attributes + `user_groups` table. All are already folded into `schema.sql`, so a fresh database built from `schema.sql` needs none of them.
 
 `database/seed.sql` is sample dev data (7 users — Alice (ADMIN) / Bob & Carol (MANAGER) / Dave, Eve, Frank, Grace (EMPLOYEE), in a two-manager hierarchy under Alice; 6 expenses across categories and statuses) and is **not** loaded by the production Compose file. Each insert is guarded with `WHERE NOT EXISTS`, so it only populates empty tables. To use it locally, run it explicitly against a disposable dev database after schema initialisation. The e2e compose file does load it.
 
@@ -183,6 +188,7 @@ All routes live under `/api/v1/`:
 | ------------------------------------------- | ------------- | -------------------------------------------------------------- |
 | `GET  /health`                              | public        | Readiness (DB connectivity check); `/health/ready` is an alias |
 | `GET  /health/live`                         | public        | Liveness — no dependencies, never touches the DB               |
+| `POST /auth/demo-login`                     | public        | Mint an isolated demo-sandbox session (only when `ENABLE_DEMO`) |
 | `GET  /me`                                  | any role      | Current user profile + roles held (synced from JWT on 1st call)|
 | `GET  /me/directory`                        | any role      | Live org profile: reporting line + Entra group memberships     |
 | `PATCH /me/preferences`                     | any role      | Update own preferences (default currency, notification toggles)|
@@ -213,7 +219,7 @@ All routes live under `/api/v1/`:
 | `GET  /admin/audit-logs`                    | ADMIN         | Filter by expense, actor, action, date range; sortable         |
 | `GET  /admin/audit-logs/export`             | ADMIN         | CSV of the filtered audit trail                                |
 
-> The `/manager/*` routes are gated to `MANAGER` only (ADMIN is not granted manager scope). All non-`/health` routes require authentication.
+> The `/manager/*` routes are gated to `MANAGER` only (ADMIN is not granted manager scope). Every route except the public ones (`/health/*` and `/auth/demo-login`) requires authentication.
 
 List endpoints accept `sort` (allow-listed column key) and `order` (`asc`/`desc`). Dashboard/stats money totals are normalized to a base currency (`USD`) via static FX rates in `server/src/utils/fx.ts` — the supported currencies are USD, EUR, GBP, CAD, AUD, and JPY (amounts in any other currency are summed at face value, 1:1); per-expense amounts keep their own currency.
 
@@ -248,7 +254,7 @@ cd client
 npm test
 npm run test:coverage
 ```
-This suite covers the services layer, the React Query hooks, utilities, and a broad set of components and pages — the employee/manager/admin dashboards, the expense form and detail view, admin expenses/users/audit-log, notifications, the sidebar, plus an accessibility smoke test — with the e2e suite layering full user journeys on top. Note that the global coverage thresholds in `client/jest.config.cjs` are still set to a low floor and have not yet been ratcheted up to match the added tests.
+This suite covers the services layer, the React Query hooks, utilities, and a broad set of components and pages — the employee/manager/admin dashboards, the expense form and detail view, admin expenses/users/audit-log, notifications, the sidebar, plus an accessibility smoke test — with the e2e suite layering full user journeys on top. The coverage thresholds in `client/jest.config.cjs` are ratcheted just below current coverage (global ~59–61%, with a stricter 90% floor on the security-sensitive `src/services/` layer) so the numbers can only go up.
 
 ### End-to-end (Playwright, from repo root)
 The e2e suite runs the API **and** the Vite client on the host (so the loopback check in `auth.ts` for stub auth works) against an ephemeral MySQL container on `127.0.0.1:3307`. Playwright starts both servers via its `webServer` config.
@@ -261,13 +267,13 @@ npm run e2e:db:down    # stop + wipe volume
 npm run e2e:db:reset   # full teardown + fresh seed
 npm run e2e:report     # show last HTML report
 ```
-Specs are serial (`workers: 1`, Chromium only), authenticate via `data-testid="stub-login-${userId}"` on `/login`, and isolate state by appending a UUID suffix to titles they create. The five spec files cover auth/RBAC, employee, manager, admin, and detail-page actions. Fixtures (`e2e/fixtures/users.ts`) mirror `database/seed.sql`.
+Specs are serial (`workers: 1`, Chromium only), authenticate via `data-testid="stub-login-${userId}"` on `/login`, and isolate state by appending a UUID suffix to titles they create. The seven spec files cover auth/RBAC, employee, manager, admin, and detail-page actions, plus API-layer authorization/data-isolation and a per-run DB-reseed check. Fixtures (`e2e/fixtures/users.ts`) mirror `database/seed.sql`.
 
 ## Observability
 
 - **Prometheus** scrapes the API's internal `:9464` metrics endpoint (plus itself, Loki, Promtail, and Grafana). Custom metrics: `expense_submissions_total`, `expense_approvals_total`, `expense_resolution_seconds`, `api_request_duration_seconds`, `api_errors_total`, plus default Node.js metrics. Retention is capped at 15 days **and** 2 GB on disk (whichever hits first); the admin API and lifecycle endpoint are disabled.
 - **Grafana** is provisioned from `docker/grafana/provisioning/`. Both Prometheus and Loki are pre-wired as read-only datasources (Prometheus is default), with a provisioned expense dashboard. Sign-up, org creation, anonymous access, Gravatar, and usage analytics are all disabled.
-- **Loki + Promtail** — Promtail mounts the Docker socket (read-only), discovers only this project's containers (matched by an anchored Compose project label, so a sibling project such as `…-e2e` can't leak its logs in), and ships their stdout to Loki. The `app` container's JSON logs are parsed so `level` becomes a queryable label. Default retention is 7 days (168h, `docker/loki/loki-config.yml`). Query in Grafana Explore with LogQL, e.g. `{service="app", level="error"}`.
+- **Loki + Promtail** — Promtail reaches the Docker API only through a read-only socket proxy (it never mounts the socket itself), discovers only this project's containers (matched by an anchored Compose project label, so a sibling project such as `…-e2e` can't leak its logs in), and ships their stdout to Loki. The `app` container's JSON logs are parsed so `level` becomes a queryable label. Default retention is 15 days (360h, `docker/loki/loki-config.yml`), matching Prometheus. Query in Grafana Explore with LogQL, e.g. `{service="app", level="error"}`.
 - **Request correlation** — every request gets an `X-Request-Id` (an inbound one is honored, otherwise minted) that is echoed to the client and attached to its access and error log lines, so a single id ties a reported failure to its server-side trace.
 - **Structured logs** — Winston emits JSON to stdout, every line stamped with `service`/`env`/`version`; access-log severity tracks HTTP status (5xx→`error`, 4xx→`warn`), and successful static-asset/health-probe lines are skipped to cut ingestion noise.
 - **Durable security-event trail** — auth/authorization and privileged-admin events (failed logins, owner-allowlist rejections, role changes, demo/stub sessions, audit-log exports) are recorded to the `security_events` table and also emitted with a stable `event` code for log-based alerting; the rows survive scale-to-zero and the log-retention window.
@@ -277,32 +283,32 @@ Specs are serial (`workers: 1`, Chromium only), authenticate via `data-testid="s
 
 - Helmet headers, strict CORS allowlist (rejected origins are logged), `x-powered-by` disabled
 - JSON body limit (`JSON_BODY_LIMIT`, default 100 kB)
-- Rate limiters: a global API limiter, a stricter limiter on `/approvals` and `/admin`, a separate health limiter, and a per-user upload limiter on `POST /expenses`
+- Rate limiters: a global API limiter, a stricter limiter on `/approvals` and `/admin`, a per-IP limiter on the public `POST /auth/demo-login`, a separate health limiter, and a per-user upload limiter on `POST /expenses`
 - `TRUST_PROXY_HOPS` is a hop count rather than a boolean to prevent `X-Forwarded-For` spoofing
 - Receipt uploads are validated by both declared MIME type **and** magic-byte signature, capped at 5 MB / 1 file, and stored under random UUID filenames
 - Winston logs run through a redaction format that scrubs tokens, secrets, authorization headers, passwords, and cookies
-- App container runs non-root (with `tini` as PID 1 for graceful shutdown) on a read-only rootfs, with `cap_drop: ALL`, `no-new-privileges`, and per-container CPU, memory, and PID limits; the application and primary MySQL images are digest-pinned (the observability images use fixed version tags) and container logs are size-capped (`max-size: 10m`, `max-file: 3`) so the json-file driver can't fill the host disk
+- App container runs non-root (with `tini` as PID 1 for graceful shutdown) on a read-only rootfs, with `cap_drop: ALL`, `no-new-privileges`, and per-container CPU, memory, and PID limits; every image is digest-pinned (`@sha256:…`) and container logs are size-capped (`max-size: 10m`, `max-file: 3`) so the json-file driver can't fill the host disk
 - MySQL is not published to the host
 - Stub auth requires `ALLOW_STUB_AUTH=true`, `NODE_ENV=development`, **and** a loopback request — Docker's port forwarding deliberately breaks the loopback check so the stub path can never be reached from outside the host
 
 ## CI/CD
 
-`.github/workflows/ci.yml` runs on push and pull requests to `main` or `master`:
+`.github/workflows/ci.yml` runs on push and pull requests to `main` or `master`, plus on `v*` release tags:
 
 ```
 lint → unit-tests → build ─┬→ integration-tests ─┐
-                           └→ e2e-tests ──────────┤→ docker-build → docker-push (main push only)
+                           └→ e2e-tests ──────────┤→ docker-build → docker-push (main push or v* tag)
 client-tests ───────────────────────────────────┘
 ```
 
 - `client-tests` (lint + Jest + build for `client/`) runs in parallel with no dependencies and also gates `docker-build`.
 - E2E browsers are cached; the Playwright HTML report and traces upload as artifacts on failure (14-day retention).
 - Coverage from server unit tests uploads as an artifact (7 days).
-- `docker-build` builds `expense-management-server` (no push). `docker-push` runs only on a push to `main` and publishes `ghcr.io/${owner}/expense-management-server:${sha}`. The script also contains a release-tag branch (`:latest` + the git tag) that is currently unreachable, since the workflow has no tag trigger and `docker-push` is gated to `main`.
+- `docker-build` builds `expense-management-server` (no push). `docker-push` runs on a push to `main` **or** a `v*` tag and publishes `ghcr.io/${owner}/expense-management-server:${sha}`; on a `v*` tag it additionally publishes `:latest` and the release tag.
 
 ### Security scanning
 
-`.github/workflows/security.yml` runs on push, pull requests, and a weekly schedule, centralising findings in the GitHub **code-scanning** tab via SARIF:
+`.github/workflows/security.yml` runs on push, pull requests, a weekly schedule, and manual dispatch, centralising findings in the GitHub **code-scanning** tab via SARIF:
 
 - **CodeQL** SAST over the TypeScript code and the workflow files themselves (`actions`), with the `security-extended` query suite.
 - **Trivy** — image CVEs (the image is built once and shared), dependency CVEs/licenses (`fs`), and Dockerfile/compose misconfiguration (`config`).
