@@ -39,7 +39,7 @@ const mockedLogger = logger as unknown as { warn: jest.Mock; info: jest.Mock; er
 // ── Helpers ───────────────────────────────────────────────────────
 
 const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
-  user: { id: 3, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+  user: { id: 3, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
   headers: {},
   params: {},
   query: {},
@@ -600,6 +600,7 @@ describe('adminController', () => {
         user: {
           id: 9,
           role: Role.ADMIN,
+          assignedRoles: [Role.ADMIN],
           email: 'demo.admin@demo.local',
           display_name: 'Demo Admin',
           demoMode: true,
@@ -635,7 +636,7 @@ describe('adminController', () => {
 
     it('refuses a demo session with no workspace id (403) and never queries', async () => {
       const req = mockRequest({
-        user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
+        user: { id: 9, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
       });
       await getAllUsers(req as Request, mockResponse() as Response, next);
       const error = next.mock.calls[0][0] as unknown as AppError;

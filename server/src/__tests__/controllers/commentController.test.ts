@@ -50,7 +50,7 @@ const mockComment = (overrides: Partial<Comment> = {}): Comment => ({
 
 const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
   // Caller (id 5) is NOT the submitter (id 99): access must run through the RBAC gate.
-  user: { id: 5, role: Role.MANAGER, email: 'manager@test.com', display_name: 'Manager' },
+  user: { id: 5, role: Role.MANAGER, assignedRoles: [Role.MANAGER], email: 'manager@test.com', display_name: 'Manager' },
   headers: {},
   params: { id: '10' },
   body: {},

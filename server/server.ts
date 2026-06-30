@@ -33,11 +33,24 @@ if (stubAuthEnabled && process.env.NODE_ENV !== 'development') {
 }
 
 // Fail-fast: enabling the public demo without a signing secret would mint
-// unverifiable demo tokens. Require the pair or neither.
-if (process.env.ENABLE_DEMO === 'true' && !process.env.DEMO_JWT_SECRET) {
-  // eslint-disable-next-line no-console
-  console.error('FATAL: ENABLE_DEMO=true requires DEMO_JWT_SECRET to be set');
-  process.exit(1);
+// unverifiable demo tokens. Require the pair or neither, and reject a weak secret
+// — the demo tokens are HS256, so a short secret is brute-forceable and would let
+// an attacker mint tokens into other visitors' demo workspaces.
+const MIN_DEMO_SECRET_LENGTH = 32;
+if (process.env.ENABLE_DEMO === 'true') {
+  const demoSecret = process.env.DEMO_JWT_SECRET || '';
+  if (!demoSecret) {
+    // eslint-disable-next-line no-console
+    console.error('FATAL: ENABLE_DEMO=true requires DEMO_JWT_SECRET to be set');
+    process.exit(1);
+  }
+  if (demoSecret.length < MIN_DEMO_SECRET_LENGTH) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `FATAL: DEMO_JWT_SECRET must be at least ${MIN_DEMO_SECRET_LENGTH} characters`,
+    );
+    process.exit(1);
+  }
 }
 
 // Real Entra auth needs the app-registration config. Require it whenever the stub
@@ -73,6 +86,21 @@ if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
     console.error('FATAL: CORS_ORIGIN is required when NODE_ENV is not "development"');
     process.exit(1);
   }
+}
+
+// Warn loudly (not fatal — empty is a valid, tested config) when the owner
+// allowlist is absent on a real deployment: with OWNER_OIDS unset, every assigned
+// tenant identity can sign in instead of just the owner. Surfacing it at boot
+// removes the "silent" failure mode where the allowlist is dropped by mistake.
+if (
+  !stubAuthEnabled &&
+  process.env.NODE_ENV !== 'development' &&
+  process.env.NODE_ENV !== 'test' &&
+  !(process.env.OWNER_OIDS || '').split(',').map((o) => o.trim()).filter(Boolean).length
+) {
+  logger.warn(
+    'OWNER_OIDS is not set: the owner allowlist is disabled, so any assigned tenant identity can authenticate',
+  );
 }
 
 const PORT = intFromEnv(process.env.PORT, 3000);

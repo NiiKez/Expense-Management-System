@@ -130,6 +130,9 @@ app.use(expressWinston.logger({
     requestId: req.id,
     userId: req.user?.id,
     role: req.user?.role,
+    // `role` above is the active (possibly switched-down) role; this shows the
+    // full set the principal actually holds, so logs reflect both.
+    assignedRoles: req.user?.assignedRoles,
   }),
 }));
 

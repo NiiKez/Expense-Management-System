@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { AlertTriangle, Loader2, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMe, useUpdatePreferences } from '@/queries/me'
 import type { User, UserPreferences } from '@/types'
@@ -181,9 +181,30 @@ export default function Settings() {
                   <p className="truncate text-sm font-semibold text-foreground">{profile.display_name}</p>
                   <p className="truncate text-sm text-muted-foreground">{profile.email}</p>
                 </div>
-                <Badge variant="secondary" className="ml-auto text-[10px] uppercase tracking-wide">
-                  {profile.role}
-                </Badge>
+                {profile.roles && profile.roles.length > 1 ? (
+                  // Multiple Entra roles: show them all, with the active one marked.
+                  <div
+                    className="ml-auto flex flex-wrap justify-end gap-1.5"
+                    data-testid="profile-roles"
+                  >
+                    {profile.roles.map((r) => (
+                      <Badge
+                        key={r}
+                        variant={r === profile.role ? 'default' : 'outline'}
+                        className="text-[10px] uppercase tracking-wide"
+                        data-testid={`profile-role-${r}`}
+                        title={r === profile.role ? 'Currently acting as' : undefined}
+                      >
+                        {r === profile.role && <Check className="size-3" />}
+                        {r}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Badge variant="secondary" className="ml-auto text-[10px] uppercase tracking-wide">
+                    {profile.role}
+                  </Badge>
+                )}
               </div>
 
               <Separator />

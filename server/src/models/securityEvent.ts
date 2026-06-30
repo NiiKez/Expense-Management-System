@@ -1,6 +1,7 @@
 import { ResultSetHeader } from 'mysql2/promise';
 import pool from '../config/db';
 import logger from '../config/logger';
+import { redactLogValue } from '../utils/logSanitizer';
 import { SecurityEventInput, SecurityOutcome } from '../types';
 
 // Column widths from schema.sql. Inputs are defensively clamped to these so an
@@ -32,27 +33,42 @@ export const securityEventModel = {
    *     authentication, so on failure we warn and swallow.
    */
   async record(event: SecurityEventInput): Promise<void> {
-    // Step 1 — the alert line. Emitted first so it survives even if the insert
-    // fails. Deliberately excludes `metadata` to keep the line compact and to
-    // avoid any chance of logging a bulky/freeform payload.
-    const line = {
-      event: event.event_type,
-      outcome: event.outcome,
-      user_id: event.user_id ?? null,
-      entra_oid: event.entra_oid ?? null,
-      role: event.role ?? null,
-      ip_address: event.ip_address ?? null,
-      request_id: event.request_id ?? null,
-      detail: event.detail ?? null,
-    };
-    if (event.outcome === SecurityOutcome.FAILURE) {
-      logger.warn('Security event', line);
-    } else {
-      logger.info('Security event', line);
-    }
-
-    // Step 2 — the durable row (best-effort).
+    // The entire body is best-effort: recording a security event MUST NEVER throw
+    // into the auth/request path that triggered it, so both the log emission and
+    // the DB write are wrapped together. `detail`/`metadata` are scrubbed of any
+    // accidental token/secret before they are emitted OR persisted — the stdout
+    // line is also redacted by Winston, but the DB row would otherwise store the
+    // raw value, so we redact here so both sinks get the same clean value.
     try {
+      const safeDetail = clamp(
+        redactLogValue(event.detail) as string | null | undefined,
+        MAX_LENGTHS.detail,
+      );
+      const safeMetadata =
+        event.metadata !== undefined && event.metadata !== null
+          ? redactLogValue(event.metadata)
+          : null;
+
+      // Step 1 — the alert line. Deliberately excludes `metadata` to keep the line
+      // compact and to avoid logging a bulky/freeform payload. FAILURE outcomes
+      // log at warn level, benign ones at info.
+      const line = {
+        event: event.event_type,
+        outcome: event.outcome,
+        user_id: event.user_id ?? null,
+        entra_oid: event.entra_oid ?? null,
+        role: event.role ?? null,
+        ip_address: event.ip_address ?? null,
+        request_id: event.request_id ?? null,
+        detail: safeDetail,
+      };
+      if (event.outcome === SecurityOutcome.FAILURE) {
+        logger.warn('Security event', line);
+      } else {
+        logger.info('Security event', line);
+      }
+
+      // Step 2 — the durable row.
       await pool.execute<ResultSetHeader>(
         `INSERT INTO security_events
            (event_type, outcome, user_id, entra_oid, role, ip_address, request_id, detail, metadata)
@@ -65,17 +81,22 @@ export const securityEventModel = {
           clamp(event.role, MAX_LENGTHS.role),
           clamp(event.ip_address, MAX_LENGTHS.ip_address),
           clamp(event.request_id, MAX_LENGTHS.request_id),
-          clamp(event.detail, MAX_LENGTHS.detail),
-          event.metadata ? JSON.stringify(event.metadata) : null,
+          safeDetail,
+          safeMetadata !== null ? JSON.stringify(safeMetadata) : null,
         ],
       );
     } catch (err) {
-      // Swallow: the event is already on stdout (step 1); a persistence failure
-      // must not propagate into the request that triggered it.
-      logger.warn('Failed to persist security event', {
-        event_type: event.event_type,
-        err: err instanceof Error ? err.message : String(err),
-      });
+      // Swallow: a logging-table outage (or any unexpected error here) must not
+      // propagate into the request that triggered it. The inner guard keeps even
+      // this diagnostic from throwing.
+      try {
+        logger.warn('Failed to persist security event', {
+          event_type: event.event_type,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        /* last resort — nothing further we can safely do */
+      }
     }
   },
 };

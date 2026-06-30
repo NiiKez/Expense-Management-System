@@ -160,6 +160,32 @@ describe('api service', () => {
 
       expect((result as typeof config).headers['X-Stub-User-Id']).toBeUndefined();
     });
+
+    it('attaches the X-Active-Role header when a valid active role is stored', async () => {
+      sessionStorage.setItem('active_role', 'MANAGER');
+
+      const handlers = (api.interceptors.request as unknown as {
+        handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
+      }).handlers;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
+
+      const config = { headers: {} as Record<string, string> };
+      const result = await interceptor(config);
+
+      expect((result as typeof config).headers['X-Active-Role']).toBe('MANAGER');
+    });
+
+    it('does not attach X-Active-Role when nothing is stored', async () => {
+      const handlers = (api.interceptors.request as unknown as {
+        handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
+      }).handlers;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
+
+      const config = { headers: {} as Record<string, string> };
+      const result = await interceptor(config);
+
+      expect((result as typeof config).headers['X-Active-Role']).toBeUndefined();
+    });
   });
 
   // ── Production MSAL path (IS_STUB_AUTH_MODE forced false) ──────────

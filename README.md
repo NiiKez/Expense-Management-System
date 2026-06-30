@@ -182,7 +182,7 @@ All routes live under `/api/v1/`:
 | ------------------------------------------- | ------------- | -------------------------------------------------------------- |
 | `GET  /health`                              | public        | Readiness (DB connectivity check); `/health/ready` is an alias |
 | `GET  /health/live`                         | public        | Liveness — no dependencies, never touches the DB               |
-| `GET  /me`                                  | any role      | Current user profile (created/synced from JWT on first call)   |
+| `GET  /me`                                  | any role      | Current user profile + roles held (synced from JWT on 1st call)|
 | `PATCH /me/preferences`                     | any role      | Update own preferences (default currency, notification toggles)|
 | `GET  /me/stats`                            | any role      | Personal aggregate stats for the dashboard                     |
 | `POST /expenses`                            | any role      | Create expense, multipart receipt upload (PDF/JPG/PNG, 5 MB)   |
@@ -219,6 +219,8 @@ Response envelope: `{ success: boolean, data?: ..., error?: { message, statusCod
 
 ### Auth model
 The auth middleware verifies the bearer JWT against Entra ID via JWKS (RS256 only, issuer + audience checked), then auto-upserts the caller into `users` keyed by `oid`. Roles are sourced from the `roles` JWT claim on every request — Entra ID app roles are the source of truth, and the DB `role` column is synced to match. If a user has multiple roles, highest privilege wins (`ADMIN` > `MANAGER` > `EMPLOYEE`); a token **without** a recognised app role is rejected with `403` (it does not silently default to `EMPLOYEE`). Deactivated users (`is_active = false`) get `401`. Routes use `authorize([roles])` as a coarse gate; controllers enforce stricter business rules (employees only see/modify their own `PENDING` expenses).
+
+A user assigned more than one app role can switch which role they are acting as from the in-app menu (the switcher is shown only when they hold >1 role). The choice rides on an `X-Active-Role` request header that the server honours **only if it names a role the caller actually holds** — otherwise it silently falls back to the highest role. A switch can therefore only *narrow* privilege, never escalate beyond what Entra granted, and the DB `role` column always tracks the canonical highest role. `GET /me` returns both the effective `role` and the full `roles` array.
 
 The stub-auth path (`ALLOW_STUB_AUTH=true` + `NODE_ENV=development` + a loopback request) reads an `X-Stub-User-Id` header instead of a JWT and is used only by local dev and Playwright.
 

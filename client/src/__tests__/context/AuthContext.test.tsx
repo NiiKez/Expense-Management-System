@@ -330,4 +330,76 @@ describe('AuthContext — MsalAuthProvider', () => {
     expect(removeQueriesSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
     expect(mockLogoutRedirect).toHaveBeenCalledTimes(1);
   });
+
+  it('logout() also clears any stored active role', () => {
+    sessionStorage.setItem('active_role', Role.MANAGER);
+    mockIsAuthenticated = true;
+    mockUseMeReturn = {
+      data: makeUser({ id: 7, role: Role.MANAGER, roles: [Role.MANAGER, Role.EMPLOYEE] }),
+      isLoading: false,
+      isError: false,
+    };
+
+    const { result } = renderMsalAuth();
+
+    act(() => {
+      result.current.logout();
+    });
+
+    expect(sessionStorage.getItem('active_role')).toBeNull();
+  });
+
+  it('switchRole persists the chosen role and refetches all queries', () => {
+    mockIsAuthenticated = true;
+    mockUseMeReturn = {
+      data: makeUser({ id: 9, role: Role.MANAGER, roles: [Role.MANAGER, Role.EMPLOYEE] }),
+      isLoading: false,
+      isError: false,
+    };
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderMsalAuth();
+
+    act(() => {
+      result.current.switchRole(Role.EMPLOYEE);
+    });
+
+    expect(sessionStorage.getItem('active_role')).toBe(Role.EMPLOYEE);
+    // invalidateQueries() with no key refetches everything, including ['me'].
+    expect(invalidateSpy).toHaveBeenCalledWith();
+    invalidateSpy.mockRestore();
+  });
+
+  it('reconciles a stale stored role the user no longer holds', () => {
+    sessionStorage.setItem('active_role', Role.ADMIN);
+    mockIsAuthenticated = true;
+    mockUseMeReturn = {
+      data: makeUser({ id: 9, role: Role.MANAGER, roles: [Role.MANAGER, Role.EMPLOYEE] }),
+      isLoading: false,
+      isError: false,
+    };
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    renderMsalAuth();
+
+    // ADMIN isn't among the held roles → it's dropped and /me is refetched so the
+    // server falls back to the highest role.
+    expect(sessionStorage.getItem('active_role')).toBeNull();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
+    invalidateSpy.mockRestore();
+  });
+
+  it('keeps a stored role the user still holds', () => {
+    sessionStorage.setItem('active_role', Role.EMPLOYEE);
+    mockIsAuthenticated = true;
+    mockUseMeReturn = {
+      data: makeUser({ id: 9, role: Role.EMPLOYEE, roles: [Role.MANAGER, Role.EMPLOYEE] }),
+      isLoading: false,
+      isError: false,
+    };
+
+    renderMsalAuth();
+
+    expect(sessionStorage.getItem('active_role')).toBe(Role.EMPLOYEE);
+  });
 });

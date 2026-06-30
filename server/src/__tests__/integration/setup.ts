@@ -20,6 +20,9 @@ import { assertDisposableTestDatabase } from './guardTestDatabase';
 export interface MockUserPayload {
   id: number;
   role: Role;
+  // Full assigned-role set the principal holds (mirrors req.user.assignedRoles).
+  // A stub identity holds exactly one role, so this is a single-element array.
+  assignedRoles: Role[];
   email: string;
   display_name: string;
   // These integration tests run with stub auth (NODE_ENV=test, no real Entra token),
@@ -34,9 +37,11 @@ export interface MockUserPayload {
  * Create a standard mock user payload for injecting into req.user.
  */
 export function mockUserPayload(overrides: Partial<MockUserPayload> = {}): MockUserPayload {
+  const role = overrides.role ?? Role.EMPLOYEE;
   return {
     id: 1,
-    role: Role.EMPLOYEE,
+    role,
+    assignedRoles: [role],
     email: 'employee@test.com',
     display_name: 'Test Employee',
     stubAuth: true,

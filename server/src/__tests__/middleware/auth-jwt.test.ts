@@ -156,9 +156,14 @@ function dbUser(overrides: Partial<User> = {}): User {
   };
 }
 
-function makeReq(token?: string): Request {
+function makeReq(token?: string, activeRole?: string): Request {
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+  // Request-scoped role switch. Passed as a string (not Role) on purpose so tests
+  // can mint malformed/stale/escalation values the server must ignore.
+  if (activeRole !== undefined) headers['x-active-role'] = activeRole;
   return {
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    headers,
     // Non-loopback + no stub header: the stub path is inert under NODE_ENV=test.
     socket: { remoteAddress: '10.0.0.5' },
   } as unknown as Request;
@@ -381,6 +386,98 @@ describe('authenticate — real Entra ID JWT path', () => {
 
       expect(mockedUserModel.updateRole).toHaveBeenCalledWith(42, Role.ADMIN);
       expect(req.user?.role).toBe(Role.ADMIN);
+    });
+  });
+
+  // ── Active-role switching via X-Active-Role ─────────────────
+  // A principal holding >1 app role may "act as" any role they actually hold.
+  // The switch is validated SERVER-SIDE against the JWT roles claim, so it can
+  // de-escalate within held roles but can NEVER escalate beyond them.
+  describe('active-role switching (X-Active-Role)', () => {
+    it('exposes the full assigned-role set, ordered highest→lowest', async () => {
+      const { err, req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'ADMIN'] })));
+
+      expect(err).toBeUndefined();
+      // Ordered ADMIN, MANAGER, EMPLOYEE regardless of claim order; only held roles.
+      expect(req.user?.assignedRoles).toEqual([Role.ADMIN, Role.EMPLOYEE]);
+    });
+
+    it('includes all three roles in privilege order when all are held', async () => {
+      const { req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'MANAGER', 'ADMIN'] })));
+
+      expect(req.user?.assignedRoles).toEqual([Role.ADMIN, Role.MANAGER, Role.EMPLOYEE]);
+    });
+
+    it('defaults the active role to the highest assigned role when no header is sent', async () => {
+      const { req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'ADMIN'] })));
+
+      expect(req.user?.role).toBe(Role.ADMIN);
+    });
+
+    it('HONORS X-Active-Role when it names a role the principal holds (de-escalation)', async () => {
+      // Holds ADMIN+EMPLOYEE, asks to act as EMPLOYEE → active role is EMPLOYEE,
+      // but the full assigned set is unchanged.
+      const { err, req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'ADMIN'] }), 'EMPLOYEE'));
+
+      expect(err).toBeUndefined();
+      expect(req.user?.role).toBe(Role.EMPLOYEE);
+      expect(req.user?.assignedRoles).toEqual([Role.ADMIN, Role.EMPLOYEE]);
+    });
+
+    it('HONORS a switch to MANAGER for a principal holding ADMIN+MANAGER+EMPLOYEE', async () => {
+      const { req } = await run(
+        makeReq(signToken({ roles: ['EMPLOYEE', 'MANAGER', 'ADMIN'] }), 'MANAGER'),
+      );
+
+      expect(req.user?.role).toBe(Role.MANAGER);
+    });
+
+    it('IGNORES X-Active-Role naming a role NOT held — no escalation (key security test)', async () => {
+      // Holds EMPLOYEE only, asks to act as ADMIN → must fall back to EMPLOYEE.
+      const { err, req } = await run(makeReq(signToken({ roles: ['EMPLOYEE'] }), 'ADMIN'));
+
+      expect(err).toBeUndefined(); // never 4xx on a bad header — silently ignored
+      expect(req.user?.role).toBe(Role.EMPLOYEE);
+      expect(req.user?.assignedRoles).toEqual([Role.EMPLOYEE]);
+    });
+
+    it('IGNORES an escalation from MANAGER to ADMIN (falls back to highest held)', async () => {
+      const { req } = await run(makeReq(signToken({ roles: ['MANAGER', 'EMPLOYEE'] }), 'ADMIN'));
+
+      expect(req.user?.role).toBe(Role.MANAGER);
+    });
+
+    it('IGNORES a malformed/unknown X-Active-Role value (falls back to highest)', async () => {
+      const { req } = await run(makeReq(signToken({ roles: ['MANAGER', 'EMPLOYEE'] }), 'SuperAdmin'));
+
+      expect(req.user?.role).toBe(Role.MANAGER);
+    });
+
+    it('IGNORES a wrong-case X-Active-Role ("employee" ≠ "EMPLOYEE")', async () => {
+      // Header matching is exact/case-sensitive, mirroring role resolution.
+      const { req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'ADMIN'] }), 'employee'));
+
+      expect(req.user?.role).toBe(Role.ADMIN);
+    });
+
+    it('syncs the DB to the CANONICAL highest role, not the switched-down active role', async () => {
+      // Stored already ADMIN (canonical), token ADMIN+EMPLOYEE, switched down to
+      // EMPLOYEE for this request. The active role differs from the stored role,
+      // but that must NOT trigger a role sync or a ROLE_CHANGED event.
+      mockedUserModel.upsertByEntraId.mockResolvedValue(dbUser({ role: Role.ADMIN }));
+
+      const { req } = await run(makeReq(signToken({ roles: ['EMPLOYEE', 'ADMIN'] }), 'EMPLOYEE'));
+
+      // Upsert uses the canonical highest role…
+      expect(mockedUserModel.upsertByEntraId).toHaveBeenCalledWith(
+        expect.objectContaining({ role: Role.ADMIN }),
+      );
+      // …no spurious sync, and no ROLE_CHANGED despite active !== stored.
+      expect(mockedUserModel.updateRole).not.toHaveBeenCalled();
+      expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
+      // …while the request still acts as the switched-down role.
+      expect(req.user?.role).toBe(Role.EMPLOYEE);
+      expect(req.user?.assignedRoles).toEqual([Role.ADMIN, Role.EMPLOYEE]);
     });
   });
 

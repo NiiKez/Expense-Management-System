@@ -16,6 +16,7 @@ import {
 import MobileNav from './MobileNav'
 import ThemeToggle from './ThemeToggle'
 import NotificationBell from './NotificationBell'
+import RoleSwitcher from '@/components/auth/RoleSwitcher'
 import { isDemoSession } from '@/services/demoAuth'
 
 interface TopbarProps {
@@ -100,6 +101,8 @@ export default function Topbar({ title }: TopbarProps) {
                 </Badge>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              {/* Role switcher — renders only when the user holds >1 role. */}
+              <RoleSwitcher />
               <DropdownMenuItem asChild>
                 <Link to="/settings" data-testid="menu-settings">
                   <Settings className="size-4" />

@@ -29,7 +29,7 @@ const mockNotification = (overrides: Partial<Notification> = {}): Notification =
 });
 
 const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
-  user: { id: CALLER_ID, role: Role.EMPLOYEE, email: 'emp@test.com', display_name: 'Employee' },
+  user: { id: CALLER_ID, role: Role.EMPLOYEE, assignedRoles: [Role.EMPLOYEE], email: 'emp@test.com', display_name: 'Employee' },
   headers: {},
   params: {},
   query: {},

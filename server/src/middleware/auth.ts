@@ -55,17 +55,34 @@ interface EntraIdTokenPayload extends jwt.JwtPayload {
 }
 
 /**
- * Resolve the user's role from the Entra ID `roles` claim.
- *
- * If multiple app roles are assigned, the highest-privilege role wins:
- * ADMIN > MANAGER > EMPLOYEE. Tokens without a recognized app role are denied.
+ * Resolve the FULL set of recognized app roles from the Entra ID `roles` claim,
+ * ordered highest→lowest privilege: ADMIN, then MANAGER, then EMPLOYEE. Only roles
+ * actually present are included; unrecognized values are dropped. Returns `[]` when
+ * the claim carries no recognized role (caller rejects with 403).
  */
-function resolveRole(roles?: unknown): Role | null {
-  if (!Array.isArray(roles) || roles.length === 0) return null;
-  if (roles.includes(Role.ADMIN)) return Role.ADMIN;
-  if (roles.includes(Role.MANAGER)) return Role.MANAGER;
-  if (roles.includes(Role.EMPLOYEE)) return Role.EMPLOYEE;
-  return null;
+function resolveRoles(roles?: unknown): Role[] {
+  if (!Array.isArray(roles) || roles.length === 0) return [];
+  const resolved: Role[] = [];
+  if (roles.includes(Role.ADMIN)) resolved.push(Role.ADMIN);
+  if (roles.includes(Role.MANAGER)) resolved.push(Role.MANAGER);
+  if (roles.includes(Role.EMPLOYEE)) resolved.push(Role.EMPLOYEE);
+  return resolved;
+}
+
+/**
+ * Pick the request-scoped ACTIVE role from the X-Active-Role header. Honored ONLY
+ * when it names a role the principal actually holds; any other value (stale,
+ * malformed, or an escalation attempt) is SILENTLY ignored, falling back to the
+ * highest assigned role. This is what guarantees a switch can never escalate
+ * beyond the roles Entra assigned.
+ */
+function resolveActiveRole(assignedRoles: Role[], header: unknown): Role {
+  // assignedRoles is ordered highest-first; [0] is the canonical default.
+  const requested = typeof header === 'string' ? header : undefined;
+  if (requested && (assignedRoles as string[]).includes(requested)) {
+    return requested as Role;
+  }
+  return assignedRoles[0];
 }
 
 /**
@@ -162,6 +179,8 @@ async function handleStubAuth(req: Request, next: NextFunction): Promise<boolean
   req.user = {
     id: user.id,
     role: user.role as Role,
+    // A stub identity holds exactly one role, so it can't switch.
+    assignedRoles: [user.role as Role],
     email: user.email,
     display_name: user.display_name,
     stubAuth: true,
@@ -243,6 +262,8 @@ async function handleDemoAuth(req: Request, next: NextFunction): Promise<boolean
   req.user = {
     id: user.id,
     role: user.role as Role,
+    // A demo identity holds exactly one role, so it can't switch.
+    assignedRoles: [user.role as Role],
     email: user.email,
     display_name: user.display_name,
     demoMode: true,
@@ -281,25 +302,32 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
 
   try {
     const decoded = await verifyToken(token);
-    const entraRole = resolveRole(decoded.roles);
-    if (!entraRole) {
+    const assignedRoles = resolveRoles(decoded.roles);
+    if (assignedRoles.length === 0) {
       next(forbidden('An assigned application role is required'));
       return;
     }
+    // Highest-privilege role: the DB-canonical role. Everything that touches the
+    // DB (upsert, role sync, ROLE_CHANGED) uses THIS, never the switched-down
+    // active role — so switching down never mutates the stored role.
+    const canonicalRole = assignedRoles[0];
 
     // Owner allowlist: when OWNER_OIDS is set, only those Entra object ids may
     // sign in (the public demo path is separate). Empty/unset = unchanged, so
-    // dev and tests are unaffected. Checked before any DB upsert.
+    // dev and tests are unaffected. Checked before any DB upsert. Comparison is
+    // case-insensitive — Entra object ids are GUIDs, so casing in the env var must
+    // never lock the owner out.
     const ownerOids = (process.env.OWNER_OIDS || '')
       .split(',')
-      .map((oid) => oid.trim())
+      .map((oid) => oid.trim().toLowerCase())
       .filter(Boolean);
-    if (ownerOids.length > 0 && !ownerOids.includes(decoded.oid)) {
+    const oid = typeof decoded.oid === 'string' ? decoded.oid.toLowerCase() : '';
+    if (ownerOids.length > 0 && !ownerOids.includes(oid)) {
       await securityEventModel.record({
         event_type: SecurityEventType.ACCESS_DENIED,
         outcome: SecurityOutcome.FAILURE,
         entra_oid: decoded.oid,
-        role: entraRole,
+        role: canonicalRole,
         ip_address: req.ip ?? null,
         request_id: req.id ?? null,
         detail: 'Object id not in OWNER_OIDS allowlist',
@@ -317,26 +345,27 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       entra_id: decoded.oid,
       email,
       display_name: displayName,
-      role: entraRole,
+      role: canonicalRole,
     });
 
-    if (user.role !== entraRole) {
+    if (user.role !== canonicalRole) {
       // Entra ID role changed — sync to DB (Entra is the source of truth) and
-      // record it. Guarded by the inequality above, so this fires only on a real
-      // role change, never on the per-request success path.
+      // record it. Guarded by the inequality above (against the CANONICAL role),
+      // so this fires only on a real role change — never when the active role was
+      // merely switched down for this request.
       const previousRole = user.role;
-      const synced = await userModel.updateRole(user.id, entraRole);
+      const synced = await userModel.updateRole(user.id, canonicalRole);
       if (synced) user = synced;
       await securityEventModel.record({
         event_type: SecurityEventType.ROLE_CHANGED,
         outcome: SecurityOutcome.SUCCESS,
         user_id: user.id,
         entra_oid: decoded.oid,
-        role: entraRole,
+        role: canonicalRole,
         ip_address: req.ip ?? null,
         request_id: req.id ?? null,
-        detail: `Role changed from ${previousRole} to ${entraRole}`,
-        metadata: { old_role: previousRole, new_role: entraRole },
+        detail: `Role changed from ${previousRole} to ${canonicalRole}`,
+        metadata: { old_role: previousRole, new_role: canonicalRole },
       });
     }
 
@@ -345,9 +374,15 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       return;
     }
 
+    // Active role for THIS request: the X-Active-Role header if it names a role
+    // the principal holds, else the highest assigned role. Validated against
+    // assignedRoles, so it can never escalate beyond what Entra granted.
+    const activeRole = resolveActiveRole(assignedRoles, req.headers['x-active-role']);
+
     req.user = {
       id: user.id,
-      role: entraRole,
+      role: activeRole,
+      assignedRoles,
       email: user.email,
       display_name: user.display_name,
     };

@@ -54,6 +54,23 @@ describe('Settings', () => {
     expect(mockedApi.get).toHaveBeenCalledWith('/me')
   })
 
+  it('shows all held roles (active one marked) when the user holds more than one', async () => {
+    mockedApi.get.mockResolvedValueOnce({
+      data: { success: true, data: { ...ME, role: 'MANAGER', roles: ['MANAGER', 'EMPLOYEE'] } },
+    })
+
+    renderWithProviders(<Settings />)
+
+    await screen.findByText('Alice Example')
+    const roles = screen.getByTestId('profile-roles')
+    expect(roles).toBeInTheDocument()
+    expect(screen.getByTestId('profile-role-MANAGER')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-role-EMPLOYEE')).toBeInTheDocument()
+    // The active role is rendered with the filled (default) badge variant.
+    expect(screen.getByTestId('profile-role-MANAGER')).toHaveAttribute('data-variant', 'default')
+    expect(screen.getByTestId('profile-role-EMPLOYEE')).toHaveAttribute('data-variant', 'outline')
+  })
+
   it('saves toggled preferences via PATCH /me/preferences', async () => {
     const user = userEvent.setup()
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: ME } })

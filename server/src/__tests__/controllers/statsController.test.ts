@@ -7,7 +7,7 @@ jest.mock('../../models/stats');
 const mockedStatsModel = statsModel as jest.Mocked<typeof statsModel>;
 
 const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
-  user: { id: 4, role: Role.EMPLOYEE, email: 'dave@test.com', display_name: 'Dave' },
+  user: { id: 4, role: Role.EMPLOYEE, assignedRoles: [Role.EMPLOYEE], email: 'dave@test.com', display_name: 'Dave' },
   headers: {}, query: {}, ...overrides,
 });
 const mockResponse = (): Partial<Response> => {
@@ -50,7 +50,7 @@ describe('statsController.getManagerStats', () => {
       baseCurrency: 'USD', byCategory: [], monthly: [],
     };
     mockedStatsModel.getTeamStats.mockResolvedValue(data);
-    const req = mockRequest({ user: { id: 2, role: Role.MANAGER, email: 'manager@test.com', display_name: 'Manager' } });
+    const req = mockRequest({ user: { id: 2, role: Role.MANAGER, assignedRoles: [Role.MANAGER], email: 'manager@test.com', display_name: 'Manager' } });
     const res = mockResponse();
     await getManagerStats(req as Request, res as Response, next);
     expect(mockedStatsModel.getTeamStats).toHaveBeenCalledWith(2);
@@ -61,7 +61,7 @@ describe('statsController.getManagerStats', () => {
   it('forwards model errors to next and does not write a response', async () => {
     const err = new Error('team stats query failed');
     mockedStatsModel.getTeamStats.mockRejectedValue(err);
-    const req = mockRequest({ user: { id: 2, role: Role.MANAGER, email: 'manager@test.com', display_name: 'Manager' } });
+    const req = mockRequest({ user: { id: 2, role: Role.MANAGER, assignedRoles: [Role.MANAGER], email: 'manager@test.com', display_name: 'Manager' } });
     const res = mockResponse();
     await getManagerStats(req as Request, res as Response, next);
     expect(next).toHaveBeenCalledWith(err);
@@ -79,7 +79,7 @@ describe('statsController.getAdminStats', () => {
       baseCurrency: 'USD', byCategory: [], monthly: [],
     };
     mockedStatsModel.getOrgStats.mockResolvedValue(data);
-    const req = mockRequest({ user: { id: 3, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' } });
+    const req = mockRequest({ user: { id: 3, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' } });
     const res = mockResponse();
     await getAdminStats(req as Request, res as Response, next);
     // Real admin → org-wide (no demo scope).
@@ -95,7 +95,7 @@ describe('statsController.getAdminStats', () => {
     };
     mockedStatsModel.getOrgStats.mockResolvedValue(data);
     const req = mockRequest({
-      user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true, demoSessionId: 'sess-abc' },
+      user: { id: 9, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true, demoSessionId: 'sess-abc' },
     });
     const res = mockResponse();
     await getAdminStats(req as Request, res as Response, next);
@@ -105,7 +105,7 @@ describe('statsController.getAdminStats', () => {
 
   it('rejects a demo session with no workspace id (403) instead of an org-wide query', async () => {
     const req = mockRequest({
-      user: { id: 9, role: Role.ADMIN, email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
+      user: { id: 9, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'demo.admin@demo.local', display_name: 'Demo Admin', demoMode: true },
     });
     const res = mockResponse();
     await getAdminStats(req as Request, res as Response, next);
@@ -117,7 +117,7 @@ describe('statsController.getAdminStats', () => {
   it('forwards model errors to next and does not write a response', async () => {
     const err = new Error('org stats query failed');
     mockedStatsModel.getOrgStats.mockRejectedValue(err);
-    const req = mockRequest({ user: { id: 3, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' } });
+    const req = mockRequest({ user: { id: 3, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' } });
     const res = mockResponse();
     await getAdminStats(req as Request, res as Response, next);
     expect(next).toHaveBeenCalledWith(err);

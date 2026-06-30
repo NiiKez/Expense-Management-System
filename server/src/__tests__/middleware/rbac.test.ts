@@ -3,9 +3,13 @@ import { authorize, denyDemo, demoScope } from '../../middleware/rbac';
 import { Role } from '../../types';
 import { AppError } from '../../utils/errors';
 
-// Helper to create a mock request with optional user
-const mockRequest = (user?: Request['user']): Partial<Request> => ({
-  user,
+// Helper to create a mock request with optional user. Callers pass the user
+// without `assignedRoles` (RBAC only inspects the active `role`); we default it
+// to a single-element set of the active role so the augmented req.user type is
+// satisfied. Pass `assignedRoles` explicitly to override.
+type MockUser = Omit<NonNullable<Request['user']>, 'assignedRoles'> & { assignedRoles?: Role[] };
+const mockRequest = (user?: MockUser): Partial<Request> => ({
+  user: user ? { assignedRoles: [user.role], ...user } : undefined,
 });
 
 const mockResponse = (): Partial<Response> => ({});

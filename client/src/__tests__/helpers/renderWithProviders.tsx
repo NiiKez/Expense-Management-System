@@ -11,6 +11,7 @@ export interface MockAuthValue {
   isLoading: boolean;
   login: jest.Mock;
   logout: jest.Mock;
+  switchRole: jest.Mock;
 }
 
 export function makeMockAuthValue(overrides: Partial<MockAuthValue> = {}): MockAuthValue {
@@ -20,6 +21,7 @@ export function makeMockAuthValue(overrides: Partial<MockAuthValue> = {}): MockA
     isLoading: false,
     login: jest.fn(),
     logout: jest.fn(),
+    switchRole: jest.fn(),
     ...overrides,
   };
 }
