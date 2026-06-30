@@ -125,16 +125,15 @@ export const approveExpense = async (req: Request, res: Response, next: NextFunc
       return;
     }
 
-    if (expense.status !== Status.PENDING) {
-      next(conflict('Only pending expenses can be approved'));
-      return;
-    }
-
     if (expense.submitted_by === req.user!.id) {
       next(forbidden('You cannot approve your own expenses'));
       return;
     }
 
+    // Authorize BEFORE any status check so a caller who does not manage this
+    // submitter gets a uniform 403 — never a 409 that would reveal the expense
+    // exists and is already decided (an enumeration oracle, reachable even by a
+    // demo session whose workspace boundary lives inside verifyManagerRelationship).
     // forceRefresh: true already bypasses the cache; no need to invalidate first.
     const relationship = await verifyManagerRelationship(req, expense.submitted_by, {
       allowCachedFallback: false,
@@ -142,6 +141,11 @@ export const approveExpense = async (req: Request, res: Response, next: NextFunc
     });
     if (!relationship.allowed) {
       next(forbidden(relationship.reason!));
+      return;
+    }
+
+    if (expense.status !== Status.PENDING) {
+      next(conflict('Only pending expenses can be approved'));
       return;
     }
 
@@ -217,22 +221,24 @@ export const rejectExpense = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    if (expense.status !== Status.PENDING) {
-      next(conflict('Only pending expenses can be rejected'));
-      return;
-    }
-
     if (expense.submitted_by === req.user!.id) {
       next(forbidden('You cannot reject your own expenses'));
       return;
     }
 
+    // Authorize BEFORE the status check (see approveExpense) so a non-manager
+    // cannot distinguish a pending vs already-decided expense by status code.
     const relationship = await verifyManagerRelationship(req, expense.submitted_by, {
       allowCachedFallback: false,
       forceRefresh: true,
     });
     if (!relationship.allowed) {
       next(forbidden(relationship.reason!));
+      return;
+    }
+
+    if (expense.status !== Status.PENDING) {
+      next(conflict('Only pending expenses can be rejected'));
       return;
     }
 

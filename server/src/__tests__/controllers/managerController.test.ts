@@ -46,6 +46,10 @@ describe('managerController', () => {
         displayName: 'Employee One',
         mail: 'employee@test.com',
         userPrincipalName: 'employee@test.com',
+        jobTitle: 'Engineer',
+        department: 'Engineering',
+        employeeId: 'E-1',
+        officeLocation: 'Berlin',
       },
     ]);
     mockedUserModel.findByEntraIds.mockResolvedValue([
@@ -62,6 +66,7 @@ describe('managerController', () => {
       },
     ]);
     mockedUserModel.reassignManagerForUsers.mockResolvedValue(undefined);
+    mockedUserModel.syncOrgAttributesForUsers.mockResolvedValue(undefined);
 
     const req = mockRequest({
       headers: { authorization: 'Bearer token-123' },
@@ -76,6 +81,10 @@ describe('managerController', () => {
       [expect.objectContaining({ id: 7, manager_id: null })],
       2,
     );
+    // Matched reports' Graph org attrs are persisted onto their rows.
+    expect(mockedUserModel.syncOrgAttributesForUsers).toHaveBeenCalledWith([
+      { id: 7, department: 'Engineering', job_title: 'Engineer', employee_id: 'E-1', office_location: 'Berlin' },
+    ]);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [
@@ -84,6 +93,10 @@ describe('managerController', () => {
           displayName: 'Employee One',
           mail: 'employee@test.com',
           userPrincipalName: 'employee@test.com',
+          jobTitle: 'Engineer',
+          department: 'Engineering',
+          employeeId: 'E-1',
+          officeLocation: 'Berlin',
           appUser: {
             id: 7,
             email: 'employee@test.com',
@@ -131,6 +144,10 @@ describe('managerController', () => {
           displayName: 'Local Employee',
           mail: 'local.employee@test.com',
           userPrincipalName: 'local.employee@test.com',
+          jobTitle: null,
+          department: null,
+          employeeId: null,
+          officeLocation: null,
           appUser: {
             id: 9,
             email: 'local.employee@test.com',
@@ -147,6 +164,37 @@ describe('managerController', () => {
         forceRefresh: false,
       },
     });
+  });
+
+  it('maps org attributes from the user row on the database fallback', async () => {
+    mockedUserModel.findByManagerId.mockResolvedValue([
+      {
+        id: 9,
+        entra_id: 'entra-local',
+        email: 'local.employee@test.com',
+        display_name: 'Local Employee',
+        role: Role.EMPLOYEE,
+        manager_id: 2,
+        is_active: true,
+        department: 'Finance',
+        job_title: 'Analyst',
+        employee_id: 'E-9',
+        office_location: 'Madrid',
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    ]);
+
+    const req = mockRequest();
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    const record = (res.json as jest.Mock).mock.calls[0][0].data[0];
+    expect(record.jobTitle).toBe('Analyst');
+    expect(record.department).toBe('Finance');
+    expect(record.employeeId).toBe('E-9');
+    expect(record.officeLocation).toBe('Madrid');
   });
 
   it('falls back to database-managed users when Graph lookup fails', async () => {
@@ -182,6 +230,10 @@ describe('managerController', () => {
           displayName: 'Local Employee',
           mail: 'local.employee@test.com',
           userPrincipalName: 'local.employee@test.com',
+          jobTitle: null,
+          department: null,
+          employeeId: null,
+          officeLocation: null,
           appUser: {
             id: 9,
             email: 'local.employee@test.com',
@@ -235,6 +287,10 @@ describe('managerController', () => {
           displayName: 'Local Employee',
           mail: 'local.employee@test.com',
           userPrincipalName: 'local.employee@test.com',
+          jobTitle: null,
+          department: null,
+          employeeId: null,
+          officeLocation: null,
           appUser: {
             id: 9,
             email: 'local.employee@test.com',
@@ -251,5 +307,74 @@ describe('managerController', () => {
         forceRefresh: false,
       },
     });
+  });
+
+  it('falls back to the database with graph_no_direct_reports when Graph returns an empty team', async () => {
+    mockedGraphApiService.getDirectReports.mockResolvedValue([]);
+    mockedUserModel.findByManagerId.mockResolvedValue([]);
+
+    const req = mockRequest({ headers: { authorization: 'Bearer token-123' } });
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    expect(mockedUserModel.findByManagerId).toHaveBeenCalledWith(2);
+    // The empty-Graph branch must not touch the reconciliation/reassign path.
+    expect(mockedUserModel.findByEntraIds).not.toHaveBeenCalled();
+    expect(mockedUserModel.reassignManagerForUsers).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [],
+      meta: {
+        source: 'database',
+        reason: 'graph_no_direct_reports',
+        forceRefresh: false,
+      },
+    });
+  });
+
+  it('serves a demo session from the database without ever calling Graph (even with a token)', async () => {
+    mockedUserModel.findByManagerId.mockResolvedValue([]);
+
+    const req = mockRequest({
+      user: {
+        id: 2,
+        role: Role.MANAGER,
+        assignedRoles: [Role.MANAGER],
+        email: 'manager@test.com',
+        display_name: 'Manager',
+        demoMode: true,
+      },
+      headers: { authorization: 'Bearer token-123' },
+    });
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    expect(mockedGraphApiService.getDirectReports).not.toHaveBeenCalled();
+    expect(mockedUserModel.findByManagerId).toHaveBeenCalledWith(2);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [],
+      meta: { source: 'database', reason: 'missing_token', forceRefresh: false },
+    });
+  });
+
+  it('forwards forceRefresh=true to Graph and echoes it in the response meta', async () => {
+    mockedGraphApiService.getDirectReports.mockResolvedValue([]);
+    mockedUserModel.findByManagerId.mockResolvedValue([]);
+
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      query: { forceRefresh: 'true' },
+    });
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    expect(mockedGraphApiService.getDirectReports).toHaveBeenCalledWith(2, 'token-123', { forceRefresh: true });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      meta: expect.objectContaining({ forceRefresh: true }),
+    }));
   });
 });

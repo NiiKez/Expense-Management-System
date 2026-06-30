@@ -1,6 +1,6 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import pool from '../config/db';
-import { User, Role } from '../types';
+import { User, Role, UserGroup } from '../types';
 import { cacheService } from '../services/cacheService';
 import logger from '../config/logger';
 import { MAX_USER_LIST } from '../utils/constants';
@@ -12,6 +12,12 @@ const USER_LIST_COLUMNS =
   'id, entra_id, email, display_name, role, manager_id, is_active, created_at, updated_at';
 
 interface UserRow extends RowDataPacket, User {}
+interface UserGroupRow extends RowDataPacket, UserGroup {}
+
+// Microsoft Graph org attributes that sync onto the users row. A fixed allowlist
+// of column names (never user-controlled) so the dynamic UPDATE is injection-safe.
+const ORG_ATTRIBUTE_COLUMNS = ['department', 'job_title', 'employee_id', 'office_location'] as const;
+type OrgAttributes = Partial<Record<(typeof ORG_ATTRIBUTE_COLUMNS)[number], string | null>>;
 
 export const userModel = {
   async findById(id: number): Promise<User | null> {
@@ -205,5 +211,101 @@ export const userModel = {
     // the submitted values match what's already stored (saving an unchanged
     // form is valid, not a 404). findById returns null only if the user is gone.
     return this.findById(id);
+  },
+
+  // Persist Microsoft Graph org attributes onto a user row. PATCH semantics: only
+  // the provided keys are written, an empty patch is a no-op, and the column names
+  // come from a fixed allowlist (never the caller). UPDATE only — no re-read, since
+  // the syncing paths already hold the values they wrote.
+  async setOrgAttributes(id: number, attrs: OrgAttributes): Promise<void> {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    for (const key of ORG_ATTRIBUTE_COLUMNS) {
+      const value = attrs[key];
+      if (value === undefined) continue;
+      sets.push(`${key} = ?`);
+      params.push(value);
+    }
+
+    if (sets.length === 0) return;
+
+    params.push(id);
+    await pool.execute<ResultSetHeader>(
+      `UPDATE users SET ${sets.join(', ')} WHERE id = ?`,
+      params,
+    );
+  },
+
+  // Bulk-sync org attributes for several users (e.g. a manager's matched direct
+  // reports). Bounded by team size, so a per-user UPDATE fanned out via Promise.all
+  // is fine — no need for a single mega-statement.
+  async syncOrgAttributesForUsers(
+    records: {
+      id: number;
+      department: string | null;
+      job_title: string | null;
+      employee_id: string | null;
+      office_location: string | null;
+    }[],
+  ): Promise<void> {
+    if (records.length === 0) return;
+    await Promise.all(
+      records.map((record) =>
+        this.setOrgAttributes(record.id, {
+          department: record.department,
+          job_title: record.job_title,
+          employee_id: record.employee_id,
+          office_location: record.office_location,
+        }),
+      ),
+    );
+  },
+
+  // Atomically replace a user's entire group membership set: DELETE the old rows
+  // then INSERT the new ones in one transaction, so a reader never sees a partial
+  // set. Deduped by group_id defensively (the PK is (user_id, group_id), so a
+  // duplicate from Graph would otherwise abort the multi-row INSERT).
+  async replaceUserGroups(
+    userId: number,
+    groups: { group_id: string; group_name: string | null }[],
+  ): Promise<void> {
+    const deduped = Array.from(
+      new Map(groups.map((group) => [group.group_id, group])).values(),
+    );
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      await conn.execute<ResultSetHeader>('DELETE FROM user_groups WHERE user_id = ?', [userId]);
+
+      if (deduped.length > 0) {
+        const placeholders = deduped.map(() => '(?, ?, ?)').join(', ');
+        const params: (number | string | null)[] = [];
+        for (const group of deduped) {
+          params.push(userId, group.group_id, group.group_name);
+        }
+        await conn.execute<ResultSetHeader>(
+          `INSERT INTO user_groups (user_id, group_id, group_name) VALUES ${placeholders}`,
+          params,
+        );
+      }
+
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  },
+
+  // The user's cached Entra group memberships, alphabetized for stable display.
+  async getUserGroups(userId: number): Promise<UserGroup[]> {
+    const [rows] = await pool.execute<UserGroupRow[]>(
+      'SELECT group_id, group_name FROM user_groups WHERE user_id = ? ORDER BY group_name ASC',
+      [userId],
+    );
+    return rows;
   },
 };

@@ -4,12 +4,19 @@ import { userModel } from '../models/user';
 import logger from '../config/logger';
 import { summarizeHttpError } from '../utils/logSanitizer';
 import { getSingleQueryValue } from '../utils/requestParsing';
+import { getBearerToken } from '../services/managerAuthorization';
 
 interface ManagerEmployeeRecord {
   id: string;
   displayName: string;
   mail: string | null;
   userPrincipalName: string;
+  // Microsoft Graph org attributes (present on the Graph path via the $select'd
+  // direct-reports query; mapped from the cached row on the DB fallback).
+  jobTitle: string | null;
+  department: string | null;
+  employeeId: string | null;
+  officeLocation: string | null;
   appUser: {
     id: number;
     email: string;
@@ -18,15 +25,6 @@ interface ManagerEmployeeRecord {
     manager_id: number | null;
     is_active: boolean;
   } | null;
-}
-
-function getBearerToken(req: Request): string {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) {
-    return '';
-  }
-
-  return header.slice(7);
 }
 
 export const getManagerEmployees = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -41,6 +39,10 @@ export const getManagerEmployees = async (req: Request, res: Response, next: Nex
         displayName: employee.display_name,
         mail: employee.email,
         userPrincipalName: employee.email,
+        jobTitle: employee.job_title ?? null,
+        department: employee.department ?? null,
+        employeeId: employee.employee_id ?? null,
+        officeLocation: employee.office_location ?? null,
         appUser: {
           id: employee.id,
           email: employee.email,
@@ -80,6 +82,20 @@ export const getManagerEmployees = async (req: Request, res: Response, next: Nex
       const matchedByEntraId = new Map(matchedUsers.map((user) => [user.entra_id, user]));
 
       await userModel.reassignManagerForUsers(matchedUsers, req.user!.id);
+
+      // Persist the matched reports' freshest org attributes from Graph (bounded
+      // by the matched set, so a per-user UPDATE fan-out is fine).
+      await userModel.syncOrgAttributesForUsers(
+        directReports
+          .filter((report) => matchedByEntraId.has(report.id))
+          .map((report) => ({
+            id: matchedByEntraId.get(report.id)!.id,
+            department: report.department,
+            job_title: report.jobTitle,
+            employee_id: report.employeeId,
+            office_location: report.officeLocation,
+          })),
+      );
 
       const data: ManagerEmployeeRecord[] = directReports.map((report) => {
         const appUser = matchedByEntraId.get(report.id);

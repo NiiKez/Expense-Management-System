@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query'
 import api from '@/services/api'
-import type { ApiResponse, User, UserPreferences, MeStats } from '@/types'
+import type { ApiResponse, User, UserPreferences, MeStats, MyDirectory } from '@/types'
 import { unwrapData } from './utils'
 
 /** Query keys for the current-user module. Co-located, not centralized. */
@@ -15,6 +15,7 @@ export const meKeys = {
   me: ['me'] as const,
   stats: ['me', 'stats'] as const,
   preferences: ['me', 'preferences'] as const,
+  directory: ['me', 'directory'] as const,
 }
 
 /** GET /me — the authenticated user's profile. */
@@ -23,6 +24,21 @@ export function useMe(opts?: { enabled?: boolean }): UseQueryResult<User, Error>
     queryKey: meKeys.me,
     queryFn: async () => unwrapData(await api.get<ApiResponse<User>>('/me')),
     enabled: opts?.enabled ?? true,
+  })
+}
+
+/**
+ * GET /me/directory — the caller's reporting line, Entra group memberships, and
+ * org attributes. Hits Microsoft Graph live (with a DB fallback server-side), so
+ * it carries a longer staleTime than the cheap DB-backed me hooks to avoid
+ * re-fetching the directory on every revisit.
+ */
+export function useMyDirectory(opts?: { enabled?: boolean }): UseQueryResult<MyDirectory, Error> {
+  return useQuery({
+    queryKey: meKeys.directory,
+    queryFn: async () => unwrapData(await api.get<ApiResponse<MyDirectory>>('/me/directory')),
+    enabled: opts?.enabled ?? true,
+    staleTime: 5 * 60_000,
   })
 }
 

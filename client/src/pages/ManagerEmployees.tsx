@@ -105,6 +105,8 @@ export default function ManagerEmployees() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Title</TableHead>
+                <TableHead>Department</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Status</TableHead>
@@ -115,6 +117,16 @@ export default function ManagerEmployees() {
                 <TableRow key={employee.id}>
                   <TableCell className="font-medium">
                     {employee.displayName}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {employee.jobTitle ?? <span className="text-muted-foreground/50">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    {employee.department ? (
+                      <Badge variant="outline">{employee.department}</Badge>
+                    ) : (
+                      <span className="text-muted-foreground/50">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {employee.mail ?? <span className="text-muted-foreground/50">—</span>}

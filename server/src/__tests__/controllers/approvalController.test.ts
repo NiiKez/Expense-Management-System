@@ -69,6 +69,10 @@ describe('approvalController.getPendingApprovals', () => {
         displayName: 'Employee One',
         mail: 'employee@test.com',
         userPrincipalName: 'employee@test.com',
+        jobTitle: null,
+        department: null,
+        employeeId: null,
+        officeLocation: null,
       },
     ]);
     mockedUserModel.findByEntraIds.mockResolvedValue([
@@ -452,6 +456,38 @@ describe('approvalController.approveExpense', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: approved });
     expect(next).not.toHaveBeenCalled();
   });
+
+  it('authorizes before the status check: a non-manager gets 403 (not a 409) on a decided expense', async () => {
+    // Expense exists but is already APPROVED and was submitted by someone this
+    // manager does NOT manage. The authorization gate must fire first, so the
+    // caller cannot use a 409 to learn the expense exists and is already decided
+    // (the enumeration oracle SEC fix).
+    mockedExpenseModel.findById.mockResolvedValue(mockExpense({ submitted_by: 7, status: Status.APPROVED }));
+    mockedUserModel.findById.mockResolvedValue({
+      id: 7,
+      entra_id: 'entra-employee',
+      email: 'employee@test.com',
+      display_name: 'Employee One',
+      role: Role.EMPLOYEE,
+      manager_id: 99, // not managed by user 2
+      is_active: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockedGraphApiService.isManagerOf.mockResolvedValue(false);
+
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      params: { id: '10' },
+    });
+    const res = mockResponse();
+
+    await approveExpense(req as Request, res as Response, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(next).not.toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409 }));
+    expect(mockedExpenseModel.approveWithVersion).not.toHaveBeenCalled();
+  });
 });
 
 describe('approvalController.rejectExpense', () => {
@@ -683,5 +719,36 @@ describe('approvalController.rejectExpense', () => {
 
     expect(mockedNotificationService.expenseDecision).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 404 }));
+  });
+
+  it('authorizes before the status check: a non-manager gets 403 (not a 409) on a decided expense', async () => {
+    // Mirror of the approve guard: the auth gate precedes the status check so a
+    // non-manager cannot distinguish a decided expense via a 409.
+    mockedExpenseModel.findById.mockResolvedValue(mockExpense({ submitted_by: 7, status: Status.REJECTED }));
+    mockedUserModel.findById.mockResolvedValue({
+      id: 7,
+      entra_id: 'entra-employee',
+      email: 'employee@test.com',
+      display_name: 'Employee One',
+      role: Role.EMPLOYEE,
+      manager_id: 99, // not managed by user 2
+      is_active: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockedGraphApiService.isManagerOf.mockResolvedValue(false);
+
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      params: { id: '10' },
+      body: { reason: 'Bad expense' },
+    });
+    const res = mockResponse();
+
+    await rejectExpense(req as Request, res as Response, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(next).not.toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409 }));
+    expect(mockedExpenseModel.rejectWithVersion).not.toHaveBeenCalled();
   });
 });

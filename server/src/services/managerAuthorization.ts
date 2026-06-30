@@ -49,9 +49,15 @@ interface ManagerRelationshipOptions {
 
 /**
  * Verify that the current user (manager/admin) is the Graph API manager of
- * the expense submitter. Admins bypass the check. Falls back to the locally
- * cached manager_id when Graph is unavailable so the system stays usable
- * during outages.
+ * the expense submitter. Admins bypass the check.
+ *
+ * The locally cached manager_id fallback is opt-in (`allowCachedFallback`) and
+ * additionally only honored for dev-only stub auth (`stubAuth && NODE_ENV !==
+ * 'production'`). Every production caller — approve/reject, getExpenseById,
+ * downloadReceipt — passes `allowCachedFallback: false`, so on a real Graph
+ * outage these paths deliberately FAIL CLOSED (deny) rather than trusting a
+ * possibly-stale cached assignment. Do not flip that default without revisiting
+ * the de-provisioning threat model.
  */
 export async function verifyManagerRelationship(
   req: Request,

@@ -150,6 +150,7 @@ In stub mode (`VITE_AUTH_MODE=stub`, localhost only) the login page lists the se
 - **Proxying** — `TRUST_PROXY_HOPS` (set to the exact number of proxies in front of the API; using `true` would let any client spoof `X-Forwarded-For`). `TRUST_PROXY=true` is a coarse fallback (one hop) when the hop count is unset.
 - **Rate limits** (per 15 min unless noted) — `API_RATE_LIMIT_MAX` (1000), `STRICT_RATE_LIMIT_MAX` (100, applied to `/approvals` and `/admin`), `UPLOAD_RATE_LIMIT_MAX` (20, per-user on `POST /expenses`), `HEALTH_RATE_LIMIT_MAX` (60/min)
 - **Entra ID** — `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` (optional, Graph OBO only), `ENTRA_TOKEN_AUDIENCE` (optional override of accepted audiences; defaults to `api://{clientId}` and `{clientId}`)
+- **Microsoft Graph** (manager hierarchy, org profile attributes and group memberships via OBO; requires the delegated permissions `User.Read.All` and `GroupMember.Read.All`) — `GRAPH_TIMEOUT_MS` (per-call timeout, default 10000); `GRAPH_RETRY_ATTEMPTS` (3) / `GRAPH_RETRY_BASE_MS` (250) / `GRAPH_RETRY_MAX_DELAY_MS` (4000) tune the throttling-aware retry that honours `Retry-After` on 429/5xx; `GRAPH_MAX_PAGES` (50) caps direct-report pagination, `GRAPH_MAX_GROUP_PAGES` (20) caps group-membership pagination, `GRAPH_MAX_CHAIN_DEPTH` (10) bounds the reporting-line walk
 - **Stub auth** — `ALLOW_STUB_AUTH=true` enables a loopback-only test login path used by Playwright (also requires `NODE_ENV=development`). The server refuses to boot if this is set outside development. Never set it in production.
 - **Compose** — `MYSQL_ROOT_PASSWORD`, `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, `APP_BIND_HOST`, `PROMETHEUS_PORT`, `GRAFANA_PORT`, `COMPOSE_PROJECT_NAME`
 
@@ -183,6 +184,7 @@ All routes live under `/api/v1/`:
 | `GET  /health`                              | public        | Readiness (DB connectivity check); `/health/ready` is an alias |
 | `GET  /health/live`                         | public        | Liveness — no dependencies, never touches the DB               |
 | `GET  /me`                                  | any role      | Current user profile + roles held (synced from JWT on 1st call)|
+| `GET  /me/directory`                        | any role      | Live org profile: reporting line + Entra group memberships     |
 | `PATCH /me/preferences`                     | any role      | Update own preferences (default currency, notification toggles)|
 | `GET  /me/stats`                            | any role      | Personal aggregate stats for the dashboard                     |
 | `POST /expenses`                            | any role      | Create expense, multipart receipt upload (PDF/JPG/PNG, 5 MB)   |

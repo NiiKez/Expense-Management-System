@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle, Check, Loader2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { useMe, useUpdatePreferences } from '@/queries/me'
+import { useMe, useMyDirectory, useUpdatePreferences } from '@/queries/me'
 import type { User, UserPreferences } from '@/types'
 import { CURRENCY_OPTIONS } from '@/lib/options'
 import { formatDate } from '@/lib/format'
@@ -88,6 +88,91 @@ function ToggleRow({
       </div>
       <Switch id={id} checked={checked} onCheckedChange={onChange} data-testid={testId} />
     </div>
+  )
+}
+
+// Org directory (reporting line + Entra groups) for the read-only profile card.
+// Pulled live from Microsoft Graph via useMyDirectory; fails quietly so a Graph
+// hiccup never breaks the Settings page.
+function OrgDirectory() {
+  const { data, isPending, isError } = useMyDirectory()
+
+  // Fail quietly: on error render nothing rather than a broken section.
+  if (isError) return null
+
+  const chain = data?.managerChain ?? []
+  const groups = data?.groups ?? []
+
+  return (
+    <>
+      <Separator />
+
+      {/* Reporting line — the caller's management chain, nearest-first */}
+      <section className="space-y-3" data-testid="reporting-line">
+        <div className="space-y-0.5">
+          <h3 className="text-sm font-semibold text-foreground">Reporting line</h3>
+          <p className="text-xs text-muted-foreground">
+            Your management chain, nearest first. Managed by Microsoft Entra ID.
+          </p>
+        </div>
+        {isPending ? (
+          <div className="space-y-2" role="status" aria-live="polite">
+            <span className="sr-only">Loading reporting line…</span>
+            <Skeleton className="h-9 w-3/5" />
+            <Skeleton className="h-9 w-2/5" />
+          </div>
+        ) : chain.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No manager on record.</p>
+        ) : (
+          <ol className="space-y-3">
+            {chain.map((m) => {
+              const sub = [m.jobTitle, m.department].filter(Boolean).join(' · ')
+              return (
+                <li key={m.id} className="flex items-center gap-3">
+                  <Avatar>
+                    <AvatarFallback>{initials(m.displayName)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{m.displayName}</p>
+                    {sub && <p className="truncate text-xs text-muted-foreground">{sub}</p>}
+                  </div>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+      </section>
+
+      <Separator />
+
+      {/* Groups — Entra ID group memberships rendered as chips */}
+      <section className="space-y-3" data-testid="profile-groups">
+        <div className="space-y-0.5">
+          <h3 className="text-sm font-semibold text-foreground">Groups</h3>
+          <p className="text-xs text-muted-foreground">
+            Your Microsoft Entra ID group memberships.
+          </p>
+        </div>
+        {isPending ? (
+          <div className="flex flex-wrap gap-2" role="status" aria-live="polite">
+            <span className="sr-only">Loading groups…</span>
+            <Skeleton className="h-6 w-24 rounded-full" />
+            <Skeleton className="h-6 w-32 rounded-full" />
+            <Skeleton className="h-6 w-20 rounded-full" />
+          </div>
+        ) : groups.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No group memberships.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {groups.map((g) => (
+              <Badge key={g.id} variant="secondary">
+                {g.name ?? 'Unnamed group'}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
   )
 }
 
@@ -210,11 +295,17 @@ export default function Settings() {
               <Separator />
 
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <Field label="Job title">{profile.jobTitle ?? '—'}</Field>
+                <Field label="Department">{profile.department ?? '—'}</Field>
+                <Field label="Office">{profile.officeLocation ?? '—'}</Field>
+                <Field label="Employee ID">{profile.employeeId ?? '—'}</Field>
                 <Field label="Manager">{profile.manager_name ?? '—'}</Field>
                 <Field label="Member since">
                   {profile.created_at ? formatDate(profile.created_at) : '—'}
                 </Field>
               </div>
+
+              <OrgDirectory />
             </CardContent>
           </Card>
 
