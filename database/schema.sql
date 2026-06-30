@@ -13,6 +13,15 @@ CREATE TABLE users (
     entra_id        VARCHAR(36)     NOT NULL,                   -- Entra Object ID (GUID)
     email           VARCHAR(255)    NOT NULL,
     display_name    VARCHAR(255)    NOT NULL,
+
+    -- Org profile attributes, read-through cached from Microsoft Graph
+    -- ($select-ed alongside displayName/mail). Like manager_id, never a source
+    -- of truth — refreshed on directory/profile reads.
+    department      VARCHAR(128)    NULL,
+    job_title       VARCHAR(128)    NULL,
+    employee_id     VARCHAR(64)     NULL,
+    office_location VARCHAR(128)    NULL,
+
     role            ENUM('EMPLOYEE', 'MANAGER', 'ADMIN')
                                     NOT NULL DEFAULT 'EMPLOYEE',
     manager_id      INT UNSIGNED    NULL,                       -- FK -> users.id (cached from Graph API)
@@ -38,12 +47,35 @@ CREATE TABLE users (
     UNIQUE KEY uk_email (email),
     KEY idx_manager_id (manager_id),
     KEY idx_role (role),
+    KEY idx_department (department),
     KEY idx_demo (is_demo, demo_expires_at),
     KEY idx_demo_session (demo_session_id),
 
     CONSTRAINT fk_users_manager
         FOREIGN KEY (manager_id) REFERENCES users (id)
         ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ============================================================
+-- USER GROUPS
+-- Entra security/Microsoft 365 group memberships, read-through cached from
+-- Graph /me/memberOf (delegated GroupMember.Read.All). Self-synced: a user's
+-- rows are refreshed when that user loads their own profile. Powers cost-center
+-- display today and group-based approval routing later. group_id is the Entra
+-- group Object ID; group_name is its displayName at sync time.
+-- ============================================================
+CREATE TABLE user_groups (
+    user_id    INT UNSIGNED NOT NULL,                              -- FK -> users.id
+    group_id   VARCHAR(36)  NOT NULL,                              -- Entra group Object ID (GUID)
+    group_name VARCHAR(256) NULL,
+    synced_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, group_id),
+    KEY idx_user_groups_group (group_id),
+
+    CONSTRAINT fk_user_groups_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- ============================================================

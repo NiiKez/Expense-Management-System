@@ -55,6 +55,14 @@ export interface User {
   notify_on_submission?: boolean;
   notify_on_decision?: boolean;
   notify_on_comment?: boolean;
+  // Org attributes synced from Microsoft Entra ID (Graph), camelCase on the wire.
+  // Optional/nullable: not every directory record populates them.
+  department?: string | null;
+  jobTitle?: string | null;
+  employeeId?: string | null;
+  officeLocation?: string | null;
+  // Entra group memberships, surfaced on the GET /me payload (may be []).
+  groups?: { id: string; name: string | null }[];
 }
 
 // Self-service settings editable on the Settings page.
@@ -166,6 +174,12 @@ export interface ManagerEmployee {
   displayName: string;
   mail: string | null;
   userPrincipalName: string;
+  // Org attributes from Microsoft Graph ($select on getDirectReports). Optional
+  // because DB-fallback records may not carry every field.
+  jobTitle?: string | null;
+  department?: string | null;
+  employeeId?: string | null;
+  officeLocation?: string | null;
   appUser: {
     id: number;
     email: string;
@@ -174,6 +188,27 @@ export interface ManagerEmployee {
     manager_id: number | null;
     is_active: boolean;
   } | null;
+}
+
+// One node of the caller's reporting line (GET /me/directory), nearest-first.
+export interface DirectoryChainMember {
+  id: string;
+  displayName: string;
+  jobTitle: string | null;
+  department: string | null;
+}
+
+// GET /me/directory — live Graph reporting line, groups, and org attributes,
+// with a DB fallback (see `meta.source`).
+export interface MyDirectory {
+  orgAttributes: {
+    department: string | null;
+    jobTitle: string | null;
+    employeeId: string | null;
+    officeLocation: string | null;
+  };
+  managerChain: DirectoryChainMember[];
+  groups: { id: string; name: string | null }[];
 }
 
 export interface CategoryTotal { category: Category; count: number; total: number }

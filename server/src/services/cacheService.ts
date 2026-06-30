@@ -46,13 +46,17 @@ export const cacheService = {
   },
 
   /**
-   * Invalidate all cache entries for a given user ID.
-   * Removes both manager and direct-reports cache keys.
+   * Invalidate all cache entries for a given user ID. Removes every per-user
+   * Graph cache key: manager, direct reports, manager chain, group memberships
+   * and the caller's own org profile.
    */
   invalidateUser(userId: number): void {
     const keysToDelete = [
       `manager:${userId}`,
       `directReports:${userId}`,
+      `managerChain:${userId}`,
+      `groups:${userId}`,
+      `meProfile:${userId}`,
     ];
     cache.del(keysToDelete);
     logger.debug('Invalidated cache for user', { userId, keys: keysToDelete });

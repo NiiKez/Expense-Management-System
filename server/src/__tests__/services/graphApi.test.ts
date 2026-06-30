@@ -7,6 +7,9 @@ const GRAPH_HOST = 'https://graph.microsoft.com';
 const TOKEN_PATH = `/${TENANT_ID}/oauth2/v2.0/token`;
 const MANAGER_PATH = '/v1.0/me/manager';
 const DIRECT_REPORTS_PATH = '/v1.0/me/directReports/microsoft.graph.user';
+const ME_PATH = '/v1.0/me';
+const GROUPS_PATH = '/v1.0/me/memberOf/microsoft.graph.group';
+const GROUPS_NEXTLINK = `${GRAPH_HOST}${GROUPS_PATH}?$skiptoken=PAGE2`;
 
 type GraphApiModule = typeof import('../../services/graphApi');
 
@@ -15,8 +18,37 @@ async function loadGraphApi(): Promise<GraphApiModule> {
   process.env.ENTRA_TENANT_ID = TENANT_ID;
   process.env.ENTRA_CLIENT_ID = '11111111-1111-1111-1111-111111111111';
   process.env.ENTRA_CLIENT_SECRET = 'test-secret';
+  // Keep the retry backoff effectively instant so the retry tests stay fast.
+  process.env.GRAPH_RETRY_BASE_MS = '1';
+  process.env.GRAPH_RETRY_MAX_DELAY_MS = '1';
 
   return import('../../services/graphApi');
+}
+
+const DIRECT_REPORTS_NEXTLINK = `${GRAPH_HOST}${DIRECT_REPORTS_PATH}?$skiptoken=PAGE2`;
+
+/** A minimal valid Graph user payload. */
+function graphUser(id: string): { id: string; displayName: string; mail: string; userPrincipalName: string } {
+  return { id, displayName: id, mail: `${id}@example.com`, userPrincipalName: `${id}@example.com` };
+}
+
+/** A Graph user payload that also carries the org attributes. */
+function orgUser(id: string): {
+  id: string; displayName: string; mail: string; userPrincipalName: string;
+  jobTitle: string; department: string; employeeId: string; officeLocation: string;
+} {
+  return {
+    ...graphUser(id),
+    jobTitle: `${id}-title`,
+    department: `${id}-dept`,
+    employeeId: `${id}-emp`,
+    officeLocation: `${id}-office`,
+  };
+}
+
+/** A Graph group payload. */
+function graphGroup(id: string): { id: string; displayName: string } {
+  return { id, displayName: `${id}-name` };
 }
 
 /** Mock the OBO token exchange endpoint (login.microsoftonline.com). */
@@ -312,5 +344,544 @@ describe('isManagerOf', () => {
     const result = await graphApiService.isManagerOf(2, 'entra-target', 'user-token', { forceRefresh: true });
 
     expect(result).toBe(false);
+  });
+
+  it('compares Entra object IDs case-insensitively (no wrongful deny on casing drift)', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, {
+      value: [graphUser('ENTRA-Target')],
+    });
+
+    const result = await graphApiService.isManagerOf(2, 'entra-target', 'user-token', { forceRefresh: true });
+
+    expect(result).toBe(true);
+  });
+});
+
+describe('result caching', () => {
+  it('serves getDirectReports from cache on a second call without forceRefresh', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+    const first = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(first.map((r) => r.id)).toEqual(['entra-1']);
+
+    // No token/Graph mock for the second call: netConnect is disabled, so a cache
+    // miss would surface as a connection error instead of silently passing.
+    const second = await graphApiService.getDirectReports(42, 'user-token');
+    expect(second.map((r) => r.id)).toEqual(['entra-1']);
+  });
+
+  it('bypasses a populated cache and re-fetches when forceRefresh is set', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-old')] });
+
+    const first = await graphApiService.getDirectReports(42, 'user-token');
+    expect(first.map((r) => r.id)).toEqual(['entra-old']);
+
+    // forceRefresh must skip the cached value and hit Graph again (needs a fresh mock).
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-new')] });
+
+    const second = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(second.map((r) => r.id)).toEqual(['entra-new']);
+  });
+
+  it('returns (and caches) an empty array for a genuinely empty team (value: [])', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [] });
+
+    const first = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(first).toEqual([]);
+
+    // The empty team is cached: a second non-forceRefresh call needs no new mock.
+    const second = await graphApiService.getDirectReports(42, 'user-token');
+    expect(second).toEqual([]);
+  });
+
+  it('throws (and does not cache) when Graph omits the value array (malformed body)', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, {});
+
+    await expect(graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true }))
+      .rejects
+      .toThrow(/missing the expected "value" array/);
+
+    // A bogus empty team must NOT have been cached: a follow-up call re-fetches
+    // (needs a fresh mock) and now succeeds with the real data.
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+    const retried = await graphApiService.getDirectReports(42, 'user-token');
+    expect(retried.map((r) => r.id)).toEqual(['entra-1']);
+  });
+});
+
+describe('OBO token caching', () => {
+  it('reuses a cached OBO token (with expires_in) across calls, re-checking membership live', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    // First call: one token exchange (expires_in long enough to cache) + one Graph fetch.
+    mockTokenExchange(200, { access_token: 'graph-token', expires_in: 3600 });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+    await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+
+    // Second forceRefresh call: only the Graph fetch is mocked. If the OBO token
+    // were not cached, the missing token-exchange mock + disabled netConnect would
+    // throw — so this passing proves the token was reused while membership is
+    // still re-fetched live.
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-2')] });
+
+    const second = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(second.map((r) => r.id)).toEqual(['entra-2']);
+  });
+
+  it('does not cache an OBO token whose lifetime is within the safety skew', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    // expires_in (30s) - skew (60s) <= 0 -> not cached, so the next call must
+    // perform a fresh exchange (both token mocks are required).
+    mockTokenExchange(200, { access_token: 'graph-token', expires_in: 30 });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+    await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+
+    mockTokenExchange(200, { access_token: 'graph-token-2', expires_in: 30 });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+    await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+
+    expect(nock.isDone()).toBe(true);
+  });
+});
+
+describe('transient-failure retry', () => {
+  it('retries the OBO token exchange on a 429 then succeeds', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    nock(LOGIN_HOST).post(TOKEN_PATH).reply(429, {}, { 'retry-after': '0' });
+    nock(LOGIN_HOST).post(TOKEN_PATH).reply(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+    const reports = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(reports.map((r) => r.id)).toEqual(['entra-1']);
+  });
+
+  it('retries the Graph GET on a 503 then succeeds', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(503, {});
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+    const reports = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(reports.map((r) => r.id)).toEqual(['entra-1']);
+  });
+
+  it('gives up after the attempt budget is exhausted and rethrows the last error', async () => {
+    const mod = await loadGraphApi();
+
+    nock(LOGIN_HOST).post(TOKEN_PATH).times(3).reply(503, { error: 'unavailable' });
+
+    const err = await captureRejection(
+      mod.graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true }),
+    );
+
+    expect((err as { response?: { status?: number } }).response?.status).toBe(503);
+    expect(mod.isGraphApiAuthError(err)).toBe(false);
+  });
+
+  it('does NOT retry a 4xx (e.g. 401) from the token endpoint', async () => {
+    const mod = await loadGraphApi();
+
+    // Only one 401 is mocked; a retry would hit the disabled netConnect and fail
+    // differently, so a clean 401 rejection proves no retry was attempted.
+    nock(LOGIN_HOST).post(TOKEN_PATH).reply(401, { error: 'unauthorized' });
+
+    const err = await captureRejection(
+      mod.graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true }),
+    );
+
+    expect((err as { response?: { status?: number } }).response?.status).toBe(401);
+  });
+});
+
+describe('getGraphTokenOBO input validation', () => {
+  it('rejects an empty user access token before calling the network', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    // No nock mocks: if it tried to exchange, disabled netConnect would throw a
+    // different error than the local validation message.
+    await expect(graphApiService.getDirectReports(42, '   ', { forceRefresh: true }))
+      .rejects
+      .toThrow(/empty user access token/i);
+  });
+});
+
+describe('validateGraphNextLink (via getDirectReports pagination)', () => {
+  async function expectNextLinkRejected(nextLink: string, message: RegExp): Promise<void> {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, {
+      value: [],
+      '@odata.nextLink': nextLink,
+    });
+
+    await expect(graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true }))
+      .rejects
+      .toThrow(message);
+  }
+
+  it('rejects a malformed (non-URL) nextLink', async () => {
+    await expectNextLinkRejected('not-a-url', /invalid pagination URL/);
+  });
+
+  it('rejects a sibling path that only prefix-matches directReports', async () => {
+    await expectNextLinkRejected(
+      `${GRAPH_HOST}/v1.0/me/directReportsEVIL?$skiptoken=abc`,
+      /unexpected pagination URL/,
+    );
+  });
+
+  it('rejects a different Graph path', async () => {
+    await expectNextLinkRejected(
+      `${GRAPH_HOST}/v1.0/users/abc?$skiptoken=abc`,
+      /unexpected pagination URL/,
+    );
+  });
+
+  it('rejects a non-https nextLink', async () => {
+    await expectNextLinkRejected(
+      'http://graph.microsoft.com/v1.0/me/directReports/microsoft.graph.user?$skiptoken=abc',
+      /unexpected pagination URL/,
+    );
+  });
+});
+
+describe('pagination page guard', () => {
+  it('throws once the configured maximum page count is exceeded', async () => {
+    process.env.GRAPH_MAX_PAGES = '2';
+    try {
+      const { graphApiService } = await loadGraphApi();
+
+      mockTokenExchange(200, { access_token: 'graph-token' });
+      // Two pages, each linking onward; the third would push past the 2-page cap.
+      nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, {
+        value: [graphUser('entra-1')],
+        '@odata.nextLink': DIRECT_REPORTS_NEXTLINK,
+      });
+      nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, {
+        value: [graphUser('entra-2')],
+        '@odata.nextLink': DIRECT_REPORTS_NEXTLINK,
+      });
+
+      await expect(graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true }))
+        .rejects
+        .toThrow(/page limit/i);
+    } finally {
+      delete process.env.GRAPH_MAX_PAGES;
+    }
+  });
+});
+
+describe('org attributes in $select', () => {
+  const ORG_FIELDS = ['jobTitle', 'department', 'employeeId', 'officeLocation'];
+
+  it('requests the org attributes on the /me/manager call', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    let captured: string | undefined;
+    nock(GRAPH_HOST)
+      .get(MANAGER_PATH)
+      .query((q) => {
+        captured = q.$select as string;
+        return true;
+      })
+      .reply(200, orgUser('entra-manager'));
+
+    await graphApiService.getManager(7, 'user-token', { forceRefresh: true });
+
+    for (const field of ORG_FIELDS) {
+      expect(captured).toContain(field);
+    }
+  });
+
+  it('requests the org attributes on the /me/directReports call', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    let captured: string | undefined;
+    nock(GRAPH_HOST)
+      .get(DIRECT_REPORTS_PATH)
+      .query((q) => {
+        captured = q.$select as string;
+        return true;
+      })
+      .reply(200, { value: [orgUser('entra-1')] });
+
+    const reports = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+
+    for (const field of ORG_FIELDS) {
+      expect(captured).toContain(field);
+    }
+    // The org fields flow straight through into the returned GraphUser.
+    expect(reports[0]).toMatchObject({
+      id: 'entra-1',
+      jobTitle: 'entra-1-title',
+      department: 'entra-1-dept',
+      employeeId: 'entra-1-emp',
+      officeLocation: 'entra-1-office',
+    });
+  });
+});
+
+describe('getMyOrgProfile', () => {
+  it('returns the caller profile with org attributes and caches it', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    let captured: string | undefined;
+    nock(GRAPH_HOST)
+      .get(ME_PATH)
+      .query((q) => {
+        captured = q.$select as string;
+        return true;
+      })
+      .reply(200, orgUser('entra-self'));
+
+    const profile = await graphApiService.getMyOrgProfile(7, 'user-token', { forceRefresh: true });
+
+    expect(captured).toContain('jobTitle');
+    expect(profile).toMatchObject({
+      id: 'entra-self',
+      jobTitle: 'entra-self-title',
+      department: 'entra-self-dept',
+      employeeId: 'entra-self-emp',
+      officeLocation: 'entra-self-office',
+    });
+
+    // Second call (no forceRefresh) is served from cache: no new mock + disabled
+    // netConnect mean a miss would surface as a connection error.
+    const second = await graphApiService.getMyOrgProfile(7, 'user-token');
+    expect(second.id).toBe('entra-self');
+  });
+
+  it('collapses missing org attributes to null', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    // Graph omits absent directory attributes entirely.
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, graphUser('entra-self'));
+
+    const profile = await graphApiService.getMyOrgProfile(7, 'user-token', { forceRefresh: true });
+
+    expect(profile).toMatchObject({
+      id: 'entra-self',
+      jobTitle: null,
+      department: null,
+      employeeId: null,
+      officeLocation: null,
+    });
+  });
+});
+
+describe('getManagerChain', () => {
+  it('flattens a nested manager chain nearest-first', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, {
+      ...orgUser('entra-self'),
+      manager: {
+        ...orgUser('entra-m1'),
+        manager: {
+          ...orgUser('entra-m2'),
+          manager: null,
+        },
+      },
+    });
+
+    const chain = await graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true });
+
+    expect(chain.map((m) => m.id)).toEqual(['entra-m1', 'entra-m2']);
+    // Self is excluded; org attributes are carried per level.
+    expect(chain[0]).toMatchObject({ id: 'entra-m1', jobTitle: 'entra-m1-title', department: 'entra-m1-dept' });
+  });
+
+  it('returns an empty array when the caller has no manager', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, orgUser('entra-self'));
+
+    const chain = await graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true });
+
+    expect(chain).toEqual([]);
+  });
+
+  it('normalizes missing org attributes on each level to null', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, {
+      ...graphUser('entra-self'),
+      manager: { ...graphUser('entra-m1'), manager: null },
+    });
+
+    const chain = await graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true });
+
+    expect(chain[0]).toMatchObject({
+      id: 'entra-m1',
+      jobTitle: null,
+      department: null,
+      employeeId: null,
+      officeLocation: null,
+    });
+  });
+
+  it('stops walking past the defensive depth cap', async () => {
+    process.env.GRAPH_MAX_CHAIN_DEPTH = '2';
+    try {
+      const { graphApiService } = await loadGraphApi();
+
+      mockTokenExchange(200, { access_token: 'graph-token' });
+      nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, {
+        ...orgUser('entra-self'),
+        manager: {
+          ...orgUser('entra-m1'),
+          manager: {
+            ...orgUser('entra-m2'),
+            manager: {
+              ...orgUser('entra-m3'),
+              manager: null,
+            },
+          },
+        },
+      });
+
+      const chain = await graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true });
+
+      // Cap of 2 → only the two nearest managers are walked; the third is dropped.
+      expect(chain.map((m) => m.id)).toEqual(['entra-m1', 'entra-m2']);
+    } finally {
+      delete process.env.GRAPH_MAX_CHAIN_DEPTH;
+    }
+  });
+
+  it('serves a cached chain on a second call without forceRefresh', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(200, {
+      ...orgUser('entra-self'),
+      manager: { ...orgUser('entra-m1'), manager: null },
+    });
+
+    const first = await graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true });
+    expect(first.map((m) => m.id)).toEqual(['entra-m1']);
+
+    // No new mock: a cache miss would hit the disabled netConnect and throw.
+    const second = await graphApiService.getManagerChain(7, 'user-token');
+    expect(second.map((m) => m.id)).toEqual(['entra-m1']);
+  });
+});
+
+describe('getGroupMemberships', () => {
+  it('paginates across @odata.nextLink pages and caches the result', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+      value: [graphGroup('group-1')],
+      '@odata.nextLink': GROUPS_NEXTLINK,
+    });
+    nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+      value: [graphGroup('group-2')],
+    });
+
+    const groups = await graphApiService.getGroupMemberships(11, 'user-token', { forceRefresh: true });
+
+    expect(groups).toEqual([
+      { id: 'group-1', displayName: 'group-1-name' },
+      { id: 'group-2', displayName: 'group-2-name' },
+    ]);
+
+    // Second call (no forceRefresh) is served from cache: no new mock required.
+    const second = await graphApiService.getGroupMemberships(11, 'user-token');
+    expect(second.map((g) => g.id)).toEqual(['group-1', 'group-2']);
+  });
+
+  it('normalizes a missing group displayName to null', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+      value: [{ id: 'group-1' }],
+    });
+
+    const groups = await graphApiService.getGroupMemberships(11, 'user-token', { forceRefresh: true });
+
+    expect(groups).toEqual([{ id: 'group-1', displayName: null }]);
+  });
+
+  it('rejects a sibling path that only prefix-matches memberOf', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+      value: [],
+      '@odata.nextLink': `${GRAPH_HOST}/v1.0/me/memberOfEVIL?$skiptoken=abc`,
+    });
+
+    await expect(graphApiService.getGroupMemberships(11, 'user-token', { forceRefresh: true }))
+      .rejects
+      .toThrow(/unexpected pagination URL/);
+  });
+
+  it('rejects a nextLink on a non-Graph host', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+      value: [],
+      '@odata.nextLink': 'https://example.test/v1.0/me/memberOf/microsoft.graph.group?$skiptoken=abc',
+    });
+
+    await expect(graphApiService.getGroupMemberships(11, 'user-token', { forceRefresh: true }))
+      .rejects
+      .toThrow(/unexpected pagination URL/);
+  });
+
+  it('throws once the configured group page cap is exceeded', async () => {
+    process.env.GRAPH_MAX_GROUP_PAGES = '2';
+    try {
+      const { graphApiService } = await loadGraphApi();
+
+      mockTokenExchange(200, { access_token: 'graph-token' });
+      nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+        value: [graphGroup('group-1')],
+        '@odata.nextLink': GROUPS_NEXTLINK,
+      });
+      nock(GRAPH_HOST).get(GROUPS_PATH).query(true).reply(200, {
+        value: [graphGroup('group-2')],
+        '@odata.nextLink': GROUPS_NEXTLINK,
+      });
+
+      await expect(graphApiService.getGroupMemberships(11, 'user-token', { forceRefresh: true }))
+        .rejects
+        .toThrow(/page limit/i);
+    } finally {
+      delete process.env.GRAPH_MAX_GROUP_PAGES;
+    }
   });
 });

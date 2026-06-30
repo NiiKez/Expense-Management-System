@@ -84,8 +84,21 @@ export interface User {
   notify_on_submission?: boolean | number;
   notify_on_decision?: boolean | number;
   notify_on_comment?: boolean | number;
+  // Microsoft Graph org attributes, synced from the directory and cached on the
+  // row. All nullable to match the columns (a user may have none set in Entra).
+  department?: string | null;
+  job_title?: string | null;
+  employee_id?: string | null;
+  office_location?: string | null;
   created_at: Date;
   updated_at: Date;
+}
+
+// One Entra group the user belongs to (cached in user_groups). group_name is
+// nullable because Graph may omit displayName for some groups.
+export interface UserGroup {
+  group_id: string;
+  group_name: string | null;
 }
 
 // Self-service settings a user can change in-app (everything else is Entra-owned).
