@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "editable": true,
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "links": [],
@@ -28,7 +28,8 @@
             "spanNulls": false,
             "stacking": { "mode": "none" }
           },
-          "unit": "ops"
+          "min": 0,
+          "unit": "opm"
         },
         "overrides": []
       },
@@ -38,7 +39,7 @@
       },
       "targets": [
         {
-          "expr": "rate(expense_submissions_total[5m]) * 60",
+          "expr": "rate(expense_submissions_total[$__rate_interval]) * 60",
           "legendFormat": "Submissions/min",
           "refId": "A"
         }
@@ -65,7 +66,8 @@
             "spanNulls": false,
             "stacking": { "mode": "none" }
           },
-          "unit": "ops"
+          "min": 0,
+          "unit": "opm"
         },
         "overrides": []
       },
@@ -75,12 +77,12 @@
       },
       "targets": [
         {
-          "expr": "rate(expense_approvals_total{outcome=\"approved\"}[5m]) * 60",
+          "expr": "rate(expense_approvals_total{outcome=\"approved\"}[$__rate_interval]) * 60",
           "legendFormat": "Approved/min",
           "refId": "A"
         },
         {
-          "expr": "rate(expense_approvals_total{outcome=\"rejected\"}[5m]) * 60",
+          "expr": "rate(expense_approvals_total{outcome=\"rejected\"}[$__rate_interval]) * 60",
           "legendFormat": "Rejected/min",
           "refId": "B"
         }
@@ -107,6 +109,7 @@
             "spanNulls": false,
             "stacking": { "mode": "none" }
           },
+          "min": 0,
           "unit": "s"
         },
         "overrides": []
@@ -117,17 +120,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, rate(expense_resolution_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.50, sum(rate(expense_resolution_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.90, rate(expense_resolution_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.90, sum(rate(expense_resolution_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p90",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, rate(expense_resolution_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.99, sum(rate(expense_resolution_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -154,6 +157,7 @@
             "spanNulls": false,
             "stacking": { "mode": "none" }
           },
+          "min": 0,
           "unit": "s"
         },
         "overrides": []
@@ -164,17 +168,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(api_request_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.90, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.90, sum(rate(api_request_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p90",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -201,7 +205,8 @@
             "spanNulls": false,
             "stacking": { "mode": "normal" }
           },
-          "unit": "ops"
+          "min": 0,
+          "unit": "opm"
         },
         "overrides": []
       },
@@ -211,14 +216,14 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(api_errors_total[5m])) by (status_code) * 60",
+          "expr": "sum(rate(api_errors_total[$__rate_interval])) by (status_code) * 60",
           "legendFormat": "{{status_code}}",
           "refId": "A"
         }
       ]
     },
     {
-      "title": "Totals",
+      "title": "Submissions (in range)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 24 },
       "id": 6,
@@ -240,14 +245,14 @@
       },
       "targets": [
         {
-          "expr": "expense_submissions_total",
+          "expr": "round(increase(expense_submissions_total[$__range]))",
           "legendFormat": "Submissions",
           "refId": "A"
         }
       ]
     },
     {
-      "title": "Approvals / Rejections",
+      "title": "Approvals / Rejections (in range)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 24 },
       "id": 7,
@@ -274,19 +279,19 @@
       },
       "targets": [
         {
-          "expr": "expense_approvals_total{outcome=\"approved\"}",
+          "expr": "round(increase(expense_approvals_total{outcome=\"approved\"}[$__range]))",
           "legendFormat": "Approved",
           "refId": "A"
         },
         {
-          "expr": "expense_approvals_total{outcome=\"rejected\"}",
+          "expr": "round(increase(expense_approvals_total{outcome=\"rejected\"}[$__range]))",
           "legendFormat": "Rejected",
           "refId": "B"
         }
       ]
     },
     {
-      "title": "Total API Errors",
+      "title": "API Errors (in range)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 24 },
       "id": 8,
@@ -315,8 +320,155 @@
       },
       "targets": [
         {
-          "expr": "sum(api_errors_total)",
+          "expr": "round(sum(increase(api_errors_total[$__range])))",
           "legendFormat": "Errors",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "API Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 9,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "req/sec",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "normal" }
+          },
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(api_request_duration_seconds_count[$__rate_interval])) by (status)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Error Ratio (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 10,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(api_request_duration_seconds_count{status=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(api_request_duration_seconds_count[$__rate_interval])), 1e-9)",
+          "legendFormat": "5xx ratio",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Service Availability",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 36 },
+      "id": 11,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "up",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "App Error Logs",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 40 },
+      "id": 12,
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "expr": "{service=\"app\", level=\"error\"}",
+          "queryType": "range",
           "refId": "A"
         }
       ]
@@ -330,5 +482,6 @@
   "timezone": "browser",
   "title": "Expense Management System",
   "uid": "expense-mgmt-dashboard",
+  "refresh": "30s",
   "version": 1
 }

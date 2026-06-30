@@ -119,8 +119,11 @@ services:
       # silently fill the volume. Whichever limit is hit first triggers GC.
       - --storage.tsdb.retention.time=15d
       - --storage.tsdb.retention.size=2GB
-      - --web.enable-lifecycle=false
-      - --web.enable-admin-api=false
+      # Keep the lifecycle/admin HTTP APIs disabled. These are kingpin toggle
+      # flags (--[no-]…); the `=false` form is rejected ("unexpected false"), so
+      # use the --no- prefix. They default to off anyway — this asserts it.
+      - --no-web.enable-lifecycle
+      - --no-web.enable-admin-api
     depends_on:
       app:
         condition: service_healthy
@@ -165,9 +168,15 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
+    # Wait until the datasources are actually answering before Grafana boots and
+    # runs provisioning — otherwise the provisioned datasources transiently show
+    # as unreachable on a cold start. Mirrors the service_healthy gating used by
+    # every other edge in this file (app→mysql, prometheus→app, promtail→loki).
     depends_on:
-      - prometheus
-      - loki
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
       interval: 30s
@@ -179,7 +188,9 @@ services:
     cap_drop:
       - ALL
     pids_limit: 128
-    mem_limit: 384m
+    # Headroom for concurrent Explore/LogQL queries against Loki (Grafana itself
+    # idles ~100-150m with SQLite + this dashboard).
+    mem_limit: 512m
     cpus: 1.0
     logging:
       driver: json-file

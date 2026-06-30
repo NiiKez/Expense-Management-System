@@ -8,3 +8,14 @@ datasources:
     uid: prometheus
     isDefault: true
     editable: false
+    jsonData:
+      # Match Prometheus's scrape_interval (prometheus.yml) so $__rate_interval
+      # and $__interval never resolve below the real sample spacing.
+      timeInterval: "15s"
+      # Send queries as POST so long PromQL isn't capped by URL length.
+      httpMethod: POST
+      # Alerts are Grafana-managed; don't try to push rules into a Prometheus
+      # that runs with --no-web.enable-lifecycle.
+      manageAlerts: false
+      prometheusType: Prometheus
+      prometheusVersion: "2.55.1"
