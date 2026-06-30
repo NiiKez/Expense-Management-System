@@ -65,6 +65,9 @@ jobs:
           queries: security-extended
           # Trigger paths-ignore only gates whether the workflow runs; analysis
           # exclusions must live here so checked-in build output isn't analysed.
+          # Test files are excluded too: fixtures hold mock identities/tokens and
+          # exercise storage helpers, which trip data-flow rules (e.g. clear-text
+          # storage) with findings that don't apply to shipped code.
           config: |
             paths-ignore:
               - '**/dist/**'
@@ -72,6 +75,12 @@ jobs:
               - '**/*.min.js'
               - 'e2e/playwright-report/**'
               - 'e2e/test-results/**'
+              - '**/__tests__/**'
+              - '**/__mocks__/**'
+              - '**/*.test.ts'
+              - '**/*.test.tsx'
+              - '**/*.spec.ts'
+              - '**/*.spec.tsx'
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
