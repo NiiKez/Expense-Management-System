@@ -28,6 +28,7 @@ const mockedGraphApiService = graphApiService as jest.Mocked<typeof graphApiServ
 const mockUser = (overrides: Partial<Request['user']> = {}): Request['user'] => ({
   id: 1,
   role: Role.EMPLOYEE,
+  assignedRoles: [Role.EMPLOYEE],
   email: 'emp@test.com',
   display_name: 'Employee',
   ...overrides,

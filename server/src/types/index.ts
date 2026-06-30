@@ -240,6 +240,10 @@ declare global {
       user?: {
         id: number;
         role: Role;
+        // All app roles the principal holds (JWT roles claim), ordered
+        // highest→lowest privilege. req.user.role is the active one (which may be
+        // switched down to any role in this set via the X-Active-Role header).
+        assignedRoles: Role[];
         email: string;
         display_name: string;
         stubAuth?: boolean;

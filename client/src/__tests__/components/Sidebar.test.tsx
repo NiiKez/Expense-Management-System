@@ -40,6 +40,7 @@ function renderSidebar(role: Role = Role.EMPLOYEE) {
     isLoading: false,
     login: jest.fn(),
     logout: jest.fn(),
+    switchRole: jest.fn(),
   })
 
   return render(

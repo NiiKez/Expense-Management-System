@@ -4,6 +4,7 @@ import { msalInstance, loginRequest } from './auth';
 import { API_BASE_URL, IS_STUB_AUTH_MODE } from './env';
 import { getStoredStubUserId } from './stubAuth';
 import { clearDemoToken, getStoredDemoToken } from './demoAuth';
+import { getStoredActiveRole } from './activeRole';
 
 // Why no default Content-Type: setting application/json here makes axios call
 // formDataToJSON() on FormData payloads (turning File parts into "{}"), which
@@ -15,6 +16,13 @@ const api = axios.create({
 });
 
 api.interceptors.request.use(async (config) => {
+  // Acting-as role (Entra role switching): attached for every auth mode. The
+  // server validates X-Active-Role against the roles the user actually holds and
+  // can only narrow, never escalate, so a stale value on a demo/stub session is
+  // harmless (single-role sessions never set it anyway).
+  const activeRole = getStoredActiveRole();
+  if (activeRole) config.headers['X-Active-Role'] = activeRole;
+
   // Demo session takes precedence: a server-signed demo JWT, sent like any
   // bearer token. Production-safe and independent of MSAL/stub.
   const demoToken = getStoredDemoToken();

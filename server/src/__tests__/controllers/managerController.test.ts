@@ -15,6 +15,7 @@ const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
   user: {
     id: 2,
     role: Role.MANAGER,
+    assignedRoles: [Role.MANAGER],
     email: 'manager@test.com',
     display_name: 'Manager',
   },

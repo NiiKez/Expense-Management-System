@@ -76,6 +76,17 @@ describe('authenticate owner allowlist (OWNER_OIDS)', () => {
     expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
   });
 
+  it('matches OWNER_OIDS case-insensitively (GUID casing must not lock the owner out)', async () => {
+    process.env.OWNER_OIDS = 'OWNER-OID, OTHER-OID';
+    mockVerify('owner-oid');
+    const req = reqWithBearer();
+
+    await authenticate(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user).toMatchObject({ id: 1, role: Role.ADMIN });
+  });
+
   it('rejects a user whose oid is not in OWNER_OIDS', async () => {
     process.env.OWNER_OIDS = 'owner-oid';
     mockVerify('intruder-oid');

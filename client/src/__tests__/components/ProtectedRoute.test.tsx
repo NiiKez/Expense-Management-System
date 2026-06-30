@@ -58,6 +58,7 @@ describe('ProtectedRoute', () => {
         isLoading: true,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -79,6 +80,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -100,6 +102,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -120,6 +123,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -138,6 +142,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -159,6 +164,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(
@@ -177,6 +183,7 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         login: jest.fn(),
         logout: jest.fn(),
+        switchRole: jest.fn(),
       });
 
       renderRoute(

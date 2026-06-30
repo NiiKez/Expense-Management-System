@@ -38,6 +38,7 @@ const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
   user: {
     id: 2,
     role: Role.MANAGER,
+    assignedRoles: [Role.MANAGER],
     email: 'manager@test.com',
     display_name: 'Manager',
   },
@@ -185,7 +186,7 @@ describe('approvalController.getPendingApprovals', () => {
     mockedExpenseModel.findAll.mockResolvedValue({ data: [mockExpense()], total: 1 });
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       query: { page: '1', pageSize: '20' },
     });
     const res = mockResponse();
@@ -207,6 +208,7 @@ describe('approvalController.getPendingApprovals', () => {
       user: {
         id: 100,
         role: Role.ADMIN,
+        assignedRoles: [Role.ADMIN],
         email: 'demo.admin@demo.local',
         display_name: 'Demo Admin',
         demoMode: true,
@@ -281,7 +283,7 @@ describe('approvalController.approveExpense', () => {
 
     // Admin bypasses the Graph manager-relationship check entirely.
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       ip: '127.0.0.1',
     });
@@ -303,7 +305,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(null);
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -319,7 +321,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(mockExpense({ status: Status.APPROVED }));
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -338,7 +340,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(mockExpense({ submitted_by: 1 }));
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -357,7 +359,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.approveWithVersion.mockResolvedValue('VERSION_CONFLICT');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -380,7 +382,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.approveWithVersion.mockResolvedValue('NOT_PENDING');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -399,7 +401,7 @@ describe('approvalController.approveExpense', () => {
     mockedExpenseModel.approveWithVersion.mockResolvedValue('NOT_FOUND');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
     });
     const res = mockResponse();
@@ -469,7 +471,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('SUCCESS');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Missing receipt' },
       ip: '127.0.0.1',
@@ -496,7 +498,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('SUCCESS');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: '   Out of policy   ' },
       ip: '127.0.0.1',
@@ -517,7 +519,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('SUCCESS');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: '   ' },
     });
@@ -530,7 +532,7 @@ describe('approvalController.rejectExpense', () => {
 
   it('throws (caught by try/catch -> next) when body.reason is missing', async () => {
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: {},
     });
@@ -548,7 +550,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(null);
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });
@@ -564,7 +566,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(mockExpense({ status: Status.REJECTED }));
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });
@@ -582,7 +584,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.findById.mockResolvedValue(mockExpense({ submitted_by: 1 }));
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });
@@ -630,7 +632,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('VERSION_CONFLICT');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });
@@ -652,7 +654,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('NOT_PENDING');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });
@@ -671,7 +673,7 @@ describe('approvalController.rejectExpense', () => {
     mockedExpenseModel.rejectWithVersion.mockResolvedValue('NOT_FOUND');
 
     const req = mockRequest({
-      user: { id: 1, role: Role.ADMIN, email: 'admin@test.com', display_name: 'Admin' },
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
       params: { id: '10' },
       body: { reason: 'Bad expense' },
     });

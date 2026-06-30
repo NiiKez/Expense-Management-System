@@ -29,7 +29,7 @@ const mockUserRow = (overrides: Partial<User> = {}): User => ({
 });
 
 const mockRequest = (overrides: Partial<Request> = {}): Partial<Request> => ({
-  user: { id: CALLER_ID, role: Role.EMPLOYEE, email: 'me@test.com', display_name: 'Me' },
+  user: { id: CALLER_ID, role: Role.EMPLOYEE, assignedRoles: [Role.EMPLOYEE], email: 'me@test.com', display_name: 'Me' },
   headers: {},
   params: {},
   body: {},
@@ -86,6 +86,8 @@ describe('meController', () => {
           id: CALLER_ID,
           email: 'me@test.com',
           role: Role.EMPLOYEE,
+          // Full assigned-role set, surfaced for the client's role picker.
+          roles: [Role.EMPLOYEE],
           manager_id: null,
           manager_name: null,
           default_currency: 'EUR',
@@ -98,6 +100,29 @@ describe('meController', () => {
       const payload = (res.json as jest.Mock).mock.calls[0][0].data;
       expect(payload.notify_on_decision).toStrictEqual(false);
       expect(payload.notify_on_submission).toStrictEqual(true);
+    });
+
+    it('reflects the ACTIVE role and full assigned set from req.user, not the DB row', async () => {
+      // DB row carries the canonical (highest) role; req.user carries the active
+      // role for this request (here switched down to MANAGER) plus the held set.
+      mockedUserModel.findById.mockResolvedValue(mockUserRow({ role: Role.ADMIN }));
+
+      const req = mockRequest({
+        user: {
+          id: CALLER_ID,
+          role: Role.MANAGER, // active (switched-down) role
+          assignedRoles: [Role.ADMIN, Role.MANAGER],
+          email: 'me@test.com',
+          display_name: 'Me',
+        },
+      });
+      const res = mockResponse();
+
+      await getMe(req as Request, res as Response, next);
+
+      const payload = (res.json as jest.Mock).mock.calls[0][0].data;
+      expect(payload.role).toBe(Role.MANAGER); // active, NOT the DB's ADMIN
+      expect(payload.roles).toEqual([Role.ADMIN, Role.MANAGER]);
     });
 
     it('defaults absent preference flags to true (column DEFAULT TRUE)', async () => {

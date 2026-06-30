@@ -44,6 +44,10 @@ export interface User {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // All roles the user holds, ordered highest→lowest (ADMIN, MANAGER, EMPLOYEE).
+  // Present on the GET /me payload; used to offer role switching when >1. Optional
+  // because the static stub-user objects built pre-fetch don't carry it.
+  roles?: Role[];
   // Present on the GET /me payload (real + stub auth via the API). Optional
   // because the static stub-user objects used pre-fetch don't carry them.
   manager_name?: string | null;

@@ -41,6 +41,7 @@ const mockRequest = (overrides: Partial<Request> = {}): Request =>
     user: {
       id: MANAGER_ID,
       role: Role.MANAGER,
+      assignedRoles: [Role.MANAGER],
       email: 'manager@test.com',
       display_name: 'Manager',
     },
@@ -79,7 +80,7 @@ describe('managerAuthorization', () => {
     describe('ADMIN bypass', () => {
       it('always authorizes an admin without looking up the submitter or calling Graph', async () => {
         const req = mockRequest({
-          user: { id: MANAGER_ID, role: Role.ADMIN, email: 'a@test.com', display_name: 'Admin' },
+          user: { id: MANAGER_ID, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'a@test.com', display_name: 'Admin' },
           headers: { authorization: 'Bearer token-123' },
         });
 
@@ -98,6 +99,7 @@ describe('managerAuthorization', () => {
       const demoAdmin = (sessionId?: string) => ({
         id: MANAGER_ID,
         role: Role.ADMIN,
+        assignedRoles: [Role.ADMIN],
         email: 'demo.admin@demo.local',
         display_name: 'Demo Admin',
         demoMode: true,
@@ -106,6 +108,7 @@ describe('managerAuthorization', () => {
       const demoManager = (sessionId: string) => ({
         id: MANAGER_ID,
         role: Role.MANAGER,
+        assignedRoles: [Role.MANAGER],
         email: 'demo.user@demo.local',
         display_name: 'Demo User',
         demoMode: true,
@@ -400,6 +403,7 @@ describe('managerAuthorization', () => {
           user: {
             id: MANAGER_ID,
             role: Role.MANAGER,
+            assignedRoles: [Role.MANAGER],
             email: 'manager@test.com',
             display_name: 'Manager',
             stubAuth: true,
@@ -419,6 +423,7 @@ describe('managerAuthorization', () => {
           user: {
             id: MANAGER_ID,
             role: Role.MANAGER,
+            assignedRoles: [Role.MANAGER],
             email: 'manager@test.com',
             display_name: 'Manager',
             stubAuth: true,
@@ -444,6 +449,7 @@ describe('managerAuthorization', () => {
             user: {
               id: MANAGER_ID,
               role: Role.MANAGER,
+              assignedRoles: [Role.MANAGER],
               email: 'manager@test.com',
               display_name: 'Manager',
               stubAuth: true,
@@ -465,7 +471,7 @@ describe('managerAuthorization', () => {
   describe('ensureCanAccessExpense', () => {
     it('allows a user to access their OWN expense without any model/Graph lookup', async () => {
       const req = mockRequest({
-        user: { id: MANAGER_ID, role: Role.EMPLOYEE, email: 'e@test.com', display_name: 'E' },
+        user: { id: MANAGER_ID, role: Role.EMPLOYEE, assignedRoles: [Role.EMPLOYEE], email: 'e@test.com', display_name: 'E' },
       });
 
       await expect(ensureCanAccessExpense(req, MANAGER_ID)).resolves.toBeUndefined();
@@ -475,7 +481,7 @@ describe('managerAuthorization', () => {
 
     it('forbids an EMPLOYEE from accessing another user\'s expense', async () => {
       const req = mockRequest({
-        user: { id: MANAGER_ID, role: Role.EMPLOYEE, email: 'e@test.com', display_name: 'E' },
+        user: { id: MANAGER_ID, role: Role.EMPLOYEE, assignedRoles: [Role.EMPLOYEE], email: 'e@test.com', display_name: 'E' },
       });
 
       await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).rejects.toMatchObject({
@@ -486,7 +492,7 @@ describe('managerAuthorization', () => {
 
     it('allows an ADMIN to access any expense (bypass)', async () => {
       const req = mockRequest({
-        user: { id: MANAGER_ID, role: Role.ADMIN, email: 'a@test.com', display_name: 'A' },
+        user: { id: MANAGER_ID, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'a@test.com', display_name: 'A' },
       });
 
       await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).resolves.toBeUndefined();

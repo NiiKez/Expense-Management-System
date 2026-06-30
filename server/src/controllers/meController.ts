@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { userModel } from '../models/user';
 import { notFound } from '../utils/errors';
 import { UpdatePreferencesInput } from '../validations/userSchema';
-import { User, UserPreferences } from '../types';
+import { Role, User, UserPreferences } from '../types';
 
 // MySQL returns BOOLEAN as 0/1; coerce so the API always emits real booleans.
 function toBool(v: boolean | number): boolean {
@@ -23,7 +23,16 @@ function preferencesOf(user: User): UserPreferences {
 // Shape the authenticated user for the client. Identity fields come straight
 // from the (Entra-synced) row; preferences are coerced to clean booleans and
 // the manager is resolved to a display name for the read-only profile section.
-async function serializeMe(user: User) {
+//
+// `role` reflects the request-scoped ACTIVE role (req.user.role, which may be a
+// role the principal switched down to), while `roles` is the full assigned set
+// ordered highest→lowest — so the client can offer a role picker. The stored
+// `user.role` (always the canonical highest role) is intentionally NOT exposed
+// directly; activeRole === assignedRoles[0] unless a valid switch is in effect.
+async function serializeMe(
+  user: User,
+  { activeRole, assignedRoles }: { activeRole: Role; assignedRoles: Role[] },
+) {
   let manager_name: string | null = null;
   if (user.manager_id) {
     const manager = await userModel.findById(user.manager_id);
@@ -35,7 +44,8 @@ async function serializeMe(user: User) {
     entra_id: user.entra_id,
     email: user.email,
     display_name: user.display_name,
-    role: user.role,
+    role: activeRole,
+    roles: assignedRoles,
     manager_id: user.manager_id,
     manager_name,
     is_active: user.is_active,
@@ -53,7 +63,13 @@ export const getMe = async (req: Request, res: Response, next: NextFunction): Pr
       next(notFound('User'));
       return;
     }
-    res.json({ success: true, data: await serializeMe(user) });
+    res.json({
+      success: true,
+      data: await serializeMe(user, {
+        activeRole: req.user!.role,
+        assignedRoles: req.user!.assignedRoles,
+      }),
+    });
   } catch (err) {
     next(err);
   }

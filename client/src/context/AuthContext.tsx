@@ -1,12 +1,13 @@
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { loginRequest } from '../services/auth';
 import { IS_STUB_AUTH_MODE } from '../services/env';
 import { clearStoredStubUser, getStoredStubUser, setStoredStubUser } from '../services/stubAuth';
 import { clearDemoToken, getStoredDemoToken } from '../services/demoAuth';
+import { clearStoredActiveRole, getStoredActiveRole, setStoredActiveRole } from '../services/activeRole';
 import { useMe } from '../queries/me';
-import type { User } from '../types';
+import type { Role, User } from '../types';
 
 interface AuthContextType {
   user: User | null;
@@ -14,6 +15,9 @@ interface AuthContextType {
   isLoading: boolean;
   login: (stubUser?: User) => Promise<void>;
   logout: () => void;
+  // Switch the role the user is acting as (only meaningful when they hold >1).
+  // Persists the choice and refetches everything so the whole app follows.
+  switchRole: (role: Role) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -22,6 +26,7 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   login: async () => {},
   logout: () => {},
+  switchRole: () => {},
 });
 
 function StubAuthProvider({ children }: { children: ReactNode }) {
@@ -37,13 +42,18 @@ function StubAuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     setUser(null);
     clearStoredStubUser();
+    clearStoredActiveRole();
   }, []);
+
+  // Stub sessions are single-role, so the switcher never renders; the no-op just
+  // satisfies the context shape. (Stub has no QueryClient ancestor to invalidate.)
+  const switchRole = useCallback(() => {}, []);
 
   // Memoize so useAuth consumers don't re-render when this provider re-renders
   // without an actual auth change.
   const value = useMemo(
-    () => ({ user, isAuthenticated: !!user, isLoading: false, login, logout }),
-    [user, login, logout],
+    () => ({ user, isAuthenticated: !!user, isLoading: false, login, logout, switchRole }),
+    [user, login, logout, switchRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -71,8 +81,33 @@ function MsalAuthProvider({ children }: { children: ReactNode }) {
     // Drop the cached profile before the redirect so the navbar doesn't briefly
     // render "logged out but with stale data" while the redirect resolves.
     queryClient.removeQueries({ queryKey: ['me'] });
+    clearStoredActiveRole();
     void instance.logoutRedirect();
   }, [instance, queryClient]);
+
+  // Persist the desired role and refetch EVERYTHING (no key = all queries),
+  // including ['me']: the server re-resolves the effective role from the
+  // X-Active-Role header and the whole app follows user.role from the fresh /me.
+  const switchRole = useCallback(
+    (role: Role) => {
+      setStoredActiveRole(role);
+      void queryClient.invalidateQueries();
+    },
+    [queryClient],
+  );
+
+  // Reconcile a stale stored role: if a previous session left an active role the
+  // user no longer holds (e.g. their Entra assignment changed), drop it and
+  // refetch /me so the server falls back to their highest role. Self-terminating:
+  // once cleared, getStoredActiveRole() is null and the guard short-circuits.
+  useEffect(() => {
+    if (!user) return;
+    const stored = getStoredActiveRole();
+    if (stored && !user.roles?.includes(stored)) {
+      clearStoredActiveRole();
+      void queryClient.invalidateQueries({ queryKey: ['me'] });
+    }
+  }, [user, queryClient]);
 
   // Memoize so useAuth consumers don't re-render on every MsalAuthProvider
   // render (MSAL state + the polled /me query re-render this often).
@@ -83,8 +118,9 @@ function MsalAuthProvider({ children }: { children: ReactNode }) {
       isLoading: isAuthenticated ? isLoading : false,
       login,
       logout,
+      switchRole,
     }),
-    [user, isAuthenticated, isLoading, login, logout],
+    [user, isAuthenticated, isLoading, login, logout, switchRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -100,7 +136,12 @@ function DemoAuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     queryClient.removeQueries({ queryKey: ['me'] });
     clearDemoToken();
+    clearStoredActiveRole();
   }, [queryClient]);
+
+  // Demo sessions hold a single role, so the switcher never renders; the no-op
+  // just satisfies the context shape.
+  const switchRole = useCallback(() => {}, []);
 
   const value = useMemo(
     () => ({
@@ -109,8 +150,9 @@ function DemoAuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login: async () => {},
       logout,
+      switchRole,
     }),
-    [user, isLoading, logout],
+    [user, isLoading, logout, switchRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
