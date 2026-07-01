@@ -1,7 +1,5 @@
-import React from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { createTestQueryClient } from '../helpers/renderWithProviders'
+import { createQueryWrapper } from '../helpers/renderWithProviders'
 import type { Expense, User, AuditLog, AdminStats } from '../../types'
 import { Category, Status, Role } from '../../types'
 
@@ -22,14 +20,6 @@ import {
 } from '@/queries/admin'
 
 const mockedApi = api as jest.Mocked<typeof api>
-
-function makeWrapper() {
-  const client = createTestQueryClient()
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  )
-  return { client, wrapper }
-}
 
 const adminStats: AdminStats = {
   orgSpendMonth: 1000,
@@ -87,7 +77,7 @@ beforeEach(() => jest.clearAllMocks())
 describe('useAdminStats', () => {
   it('GETs /admin/stats', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: adminStats } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useAdminStats(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -101,7 +91,7 @@ describe('useAdminExpenses', () => {
     mockedApi.get.mockResolvedValueOnce({
       data: { success: true, data: [expense], pagination: { total: 1, page: 1, pageSize: 20 } },
     })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const params: AdminExpenseParams = {
       page: 1,
       pageSize: 20,
@@ -120,7 +110,7 @@ describe('useAdminExpenses', () => {
 describe('useUsers', () => {
   it('GETs /admin/users', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: [adminUser] } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useUsers(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -134,7 +124,7 @@ describe('useAuditLogs', () => {
     mockedApi.get.mockResolvedValueOnce({
       data: { success: true, data: [auditEntry], pagination: { total: 1, page: 1, pageSize: 20 } },
     })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const params: AuditLogParams = { page: 1, pageSize: 20, action: 'APPROVED' }
     const { result } = renderHook(() => useAuditLogs(params), { wrapper })
 

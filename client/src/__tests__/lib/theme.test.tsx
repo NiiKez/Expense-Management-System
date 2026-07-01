@@ -15,6 +15,16 @@ describe('ThemeProvider', () => {
     expect(localStorage.getItem('theme')).toBe('dark')
   })
 
+  it('restores a stored light theme instead of defaulting to dark', () => {
+    // getInitialTheme reads this on mount, so it must be set before rendering.
+    localStorage.setItem('theme', 'light')
+
+    const { result } = renderHook(() => useTheme(), { wrapper })
+
+    expect(result.current.theme).toBe('light')
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+  })
+
   it('toggle flips the theme and persists the choice', () => {
     const { result } = renderHook(() => useTheme(), { wrapper })
     expect(result.current.theme).toBe('dark')

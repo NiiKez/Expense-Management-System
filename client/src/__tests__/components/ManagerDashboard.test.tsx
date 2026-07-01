@@ -78,4 +78,56 @@ describe('ManagerDashboard', () => {
     })
     expect(screen.getByText('Hotel Stay')).toBeInTheDocument()
   })
+
+  it('renders skeleton placeholders while the queries are pending', () => {
+    mockedGet.mockReset()
+    mockedGet.mockReturnValue(new Promise(() => {})) // never resolves → stays pending
+
+    const { container } = renderWithProviders(<ManagerDashboard />)
+
+    // The stat + list skeletons render; the resolved happy content does not yet.
+    expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Team size')).not.toBeInTheDocument()
+  })
+
+  it('shows the "Could not load stats" empty state when the stats query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/manager/stats') return Promise.reject(new Error('boom'))
+      // Keep the list happy so we isolate the stats failure.
+      return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 5 } } })
+    })
+
+    renderWithProviders(<ManagerDashboard />)
+
+    expect(await screen.findByText('Could not load stats')).toBeInTheDocument()
+  })
+
+  it('shows the list error empty state when the pending-approvals query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/manager/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/approvals/pending') return Promise.reject(new Error('boom'))
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<ManagerDashboard />)
+
+    expect(await screen.findByText('Could not load pending approvals')).toBeInTheDocument()
+  })
+
+  it('shows the empty-list state when there are no pending approvals', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/manager/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/approvals/pending') {
+        return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 5 } } })
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<ManagerDashboard />)
+
+    expect(await screen.findByText('No pending approvals')).toBeInTheDocument()
+  })
 })

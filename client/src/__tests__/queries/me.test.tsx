@@ -1,8 +1,6 @@
-import React from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { createTestQueryClient } from '../helpers/renderWithProviders'
-import type { User, MeStats, UserPreferences } from '../../types'
+import { createQueryWrapper } from '../helpers/renderWithProviders'
+import type { User, MeStats, UserPreferences, MyDirectory } from '../../types'
 import { Role } from '../../types'
 
 // Prevent PublicClientApplication construction (needs Web Crypto, absent in jsdom).
@@ -13,17 +11,9 @@ jest.mock('@/services/auth', () => ({
 }))
 jest.mock('@/services/api')
 import api from '@/services/api'
-import { useMe, useMeStats, useUpdatePreferences, meKeys } from '@/queries/me'
+import { useMe, useMeStats, useMyDirectory, useUpdatePreferences, meKeys } from '@/queries/me'
 
 const mockedApi = api as jest.Mocked<typeof api>
-
-function makeWrapper() {
-  const client = createTestQueryClient()
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  )
-  return { client, wrapper }
-}
 
 const user: User = {
   id: 1,
@@ -50,7 +40,7 @@ beforeEach(() => jest.clearAllMocks())
 describe('useMe', () => {
   it('GETs /me and returns the unwrapped user', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: user } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useMe(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -59,7 +49,7 @@ describe('useMe', () => {
   })
 
   it('does not fetch when disabled', () => {
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     renderHook(() => useMe({ enabled: false }), { wrapper })
     expect(mockedApi.get).not.toHaveBeenCalled()
   })
@@ -68,12 +58,35 @@ describe('useMe', () => {
 describe('useMeStats', () => {
   it('GETs /me/stats and returns the unwrapped stats', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: stats } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useMeStats(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockedApi.get).toHaveBeenCalledWith('/me/stats')
     expect(result.current.data).toEqual(stats)
+  })
+})
+
+describe('useMyDirectory', () => {
+  it('GETs /me/directory and returns the unwrapped directory', async () => {
+    const directory: MyDirectory = {
+      orgAttributes: { department: 'Eng', jobTitle: 'SWE', employeeId: 'E-1', officeLocation: 'SF' },
+      managerChain: [{ id: 'oid-9', displayName: 'Boss', jobTitle: 'Director', department: 'Eng' }],
+      groups: [{ id: 'g1', name: 'Engineering' }],
+    }
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: directory } })
+    const { wrapper } = createQueryWrapper()
+    const { result } = renderHook(() => useMyDirectory(), { wrapper })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockedApi.get).toHaveBeenCalledWith('/me/directory')
+    expect(result.current.data).toEqual(directory)
+  })
+
+  it('does not fetch when disabled', () => {
+    const { wrapper } = createQueryWrapper()
+    renderHook(() => useMyDirectory({ enabled: false }), { wrapper })
+    expect(mockedApi.get).not.toHaveBeenCalled()
   })
 })
 
@@ -86,7 +99,7 @@ describe('useUpdatePreferences', () => {
       notify_on_comment: true,
     }
     mockedApi.patch.mockResolvedValueOnce({ data: { success: true, data: prefs } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const invalidateSpy = jest.spyOn(client, 'invalidateQueries')
 
     const { result } = renderHook(() => useUpdatePreferences(), { wrapper })

@@ -1,7 +1,5 @@
-import React from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { createTestQueryClient } from '../helpers/renderWithProviders'
+import { createQueryWrapper } from '../helpers/renderWithProviders'
 import type { OrgTree } from '../../types'
 
 // Prevent PublicClientApplication construction (needs Web Crypto, absent in jsdom).
@@ -16,14 +14,6 @@ import { useOrgTree, useOrgUser, orgKeys } from '@/queries/org'
 import type { OrgUserDetail } from '../../types'
 
 const mockedApi = api as jest.Mocked<typeof api>
-
-function makeWrapper() {
-  const client = createTestQueryClient()
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  )
-  return { client, wrapper }
-}
 
 const tree: OrgTree = {
   scope: 'MANAGER',
@@ -48,7 +38,7 @@ beforeEach(() => jest.clearAllMocks())
 describe('useOrgTree', () => {
   it('GETs /org/tree and returns the unwrapped tree', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: tree } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useOrgTree(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -58,7 +48,7 @@ describe('useOrgTree', () => {
 
   it('passes maxDepth through as a query param', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: tree } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useOrgTree({ maxDepth: 3 }), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -66,7 +56,7 @@ describe('useOrgTree', () => {
   })
 
   it('does not fetch when disabled', () => {
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     renderHook(() => useOrgTree({ enabled: false }), { wrapper })
     expect(mockedApi.get).not.toHaveBeenCalled()
   })
@@ -96,7 +86,7 @@ const userDetail: OrgUserDetail = {
 describe('useOrgUser', () => {
   it('GETs /org/users/:id and returns the unwrapped detail', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: userDetail } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useOrgUser(3), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -105,7 +95,7 @@ describe('useOrgUser', () => {
   })
 
   it('does not fetch when the id is null (dialog closed)', () => {
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     renderHook(() => useOrgUser(null), { wrapper })
     expect(mockedApi.get).not.toHaveBeenCalled()
   })

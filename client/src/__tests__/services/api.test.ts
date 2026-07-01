@@ -93,6 +93,32 @@ function getResponseRejectedHandler(instance: typeof api) {
   return handlers[handlers.length - 1]!.rejected;
 }
 
+// Observe a window.location.assign('/login') hard-navigation. jsdom LOCKS location:
+// verified empirically that both `window.location` (a non-configurable accessor) and
+// its `assign` (an own, non-writable, non-configurable method) can be neither spied nor
+// replaced — so the '/login' argument itself is unobservable, and the target URL never
+// appears in the error jsdom emits. What IS observable is the jsdom "Not implemented:
+// navigation" jsdomError, forwarded to console.error — the concrete side-effect of
+// assign(). We capture console.error and count ONLY navigation errors: strictly stronger
+// than the old `toHaveBeenCalled()` (any stray log satisfied that), proving a real
+// navigation fired exactly once. NB: the jsdomError originates in jsdom's own realm, so
+// `arg instanceof Error` is false in the test realm — we match on the message string.
+function navMessage(a: unknown): string {
+  const msg = (a as { message?: unknown })?.message;
+  return typeof msg === 'string' ? msg : String(a);
+}
+function captureNavigationErrors() {
+  const calls: unknown[][] = [];
+  const spy = jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    calls.push(args);
+  });
+  return {
+    navErrors: () =>
+      calls.filter((args) => args.some((a) => /navigation/i.test(navMessage(a)))).length,
+    restore: () => spy.mockRestore(),
+  };
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe('api service', () => {
@@ -331,6 +357,57 @@ describe('api service', () => {
       await expect(rejected(error500)).rejects.toBe(error500);
       expect(msalInstance.acquireTokenRedirect).not.toHaveBeenCalled();
     });
+
+    it('releases the redirect guard when acquireTokenRedirect itself throws, so a later 401 can retry', async () => {
+      const { api: msalApi, msalInstance } = await loadMsalApi();
+      // Regression guard for api.ts's 401 catch: if the FIRST acquireTokenRedirect
+      // rejects (e.g. MSAL refuses to start interaction) and redirectInFlight is not
+      // reset, the flag stays permanently true and NO future 401 ever re-auths again.
+      // First attempt rejects; all later attempts use the default resolving impl.
+      msalInstance.acquireTokenRedirect
+        .mockRejectedValueOnce(new Error('redirect refused'))
+        .mockResolvedValue(undefined);
+
+      const rejected = getResponseRejectedHandler(msalApi);
+      const error401 = { response: { status: 401 } };
+
+      // First 401: redirect throws → catch resets the guard → interceptor returns a
+      // never-resolving promise. Flush a macrotask so the catch has definitely run
+      // before the second 401 observes the (now released) guard.
+      const first = rejected(error401);
+      first.catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Second 401: guard released ⇒ a fresh redirect MUST fire (proving the release).
+      const second = rejected(error401);
+      second.catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(msalInstance.acquireTokenRedirect).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ── Stub-mode 401 response interceptor (default stub env) ─────────
+  // The top-level `api` import runs under the real stub env (VITE_AUTH_MODE=stub +
+  // localhost, non-prod), so IS_STUB_AUTH_MODE is true. The reauth branch is gated
+  // behind `!IS_STUB_AUTH_MODE`, so a stub 401 must simply propagate — there is no
+  // MSAL redirect to run. Every MSAL-path test above forces the production branch via
+  // loadMsalApi(), leaving this stub branch otherwise unexercised.
+  describe('stub-mode 401 response interceptor (default stub env)', () => {
+    it('rejects a 401 with the original error and never triggers an MSAL redirect', async () => {
+      // The hoisted top-level services/auth mock is what the stub-env `api` closes
+      // over; grab it to prove acquireTokenRedirect stays untouched here.
+      const auth = jest.requireMock('../../services/auth') as {
+        msalInstance: { acquireTokenRedirect: jest.Mock };
+      };
+      auth.msalInstance.acquireTokenRedirect.mockClear();
+
+      const rejected = getResponseRejectedHandler(api);
+      const error401 = { response: { status: 401 } };
+
+      await expect(rejected(error401)).rejects.toBe(error401);
+      expect(auth.msalInstance.acquireTokenRedirect).not.toHaveBeenCalled();
+    });
   });
 
   // ── Demo-session interceptors (production path) ───────────────────
@@ -358,7 +435,7 @@ describe('api service', () => {
     it('clears the demo token and redirects to /login on a 401 response', async () => {
       const { api: msalApi, msalInstance } = await loadMsalApi();
       sessionStorage.setItem('demo_token', 'demo-jwt-abc');
-      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const nav = captureNavigationErrors();
 
       const rejected = getResponseRejectedHandler(msalApi);
       // The demo 401 branch runs synchronously (no await before assign) then returns
@@ -368,10 +445,13 @@ describe('api service', () => {
       pending.catch(() => {});
 
       expect(sessionStorage.getItem('demo_token')).toBeNull(); // clearDemoToken() ran
-      expect(errSpy).toHaveBeenCalled(); // window.location.assign('/login') attempted
+      // window.location.assign('/login') fired exactly one hard navigation (see
+      // captureNavigationErrors: jsdom locks location so the '/login' arg is
+      // unobservable, but the single navigation side-effect is).
+      expect(nav.navErrors()).toBe(1);
       // Demo sessions never fall through to MSAL's silent-reauth redirect.
       expect(msalInstance.acquireTokenRedirect).not.toHaveBeenCalled();
-      errSpy.mockRestore();
+      nav.restore();
     });
 
     it('rejects a non-401 demo error with the original error and keeps the token', async () => {

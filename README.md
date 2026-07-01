@@ -256,7 +256,7 @@ cd client
 npm test
 npm run test:coverage
 ```
-This suite covers the services layer, the React Query hooks, utilities, and a broad set of components and pages — the employee/manager/admin dashboards, the expense form and detail view, admin expenses/users/audit-log, notifications, the sidebar, plus an accessibility smoke test — with the e2e suite layering full user journeys on top. The coverage thresholds in `client/jest.config.cjs` are ratcheted just below current coverage (global ~59–61%, with a stricter 90% floor on the security-sensitive `src/services/` layer) so the numbers can only go up.
+This suite covers the services layer, the React Query hooks, utilities, routing/authorization wiring, and the components and pages — the employee/manager/admin dashboards, the expense form/detail/table, admin expenses/users/audit-log, notifications, the layout chrome, plus an accessibility smoke test — with the e2e suite layering full user journeys on top. A shared setup fails any test that logs an unexpected `console.error`/`console.warn` (catching React `act()` and prop warnings). The coverage thresholds in `client/jest.config.cjs` are ratcheted just below current coverage (global ~90%, with a stricter ~95% floor on the security-sensitive `src/services/` layer; the generated `ui/` primitives are excluded) so the numbers can only go up.
 
 ### End-to-end (Playwright, from repo root)
 The e2e suite runs the API **and** the Vite client on the host (so the loopback check in `auth.ts` for stub auth works) against an ephemeral MySQL container on `127.0.0.1:3307`. Playwright starts both servers via its `webServer` config.

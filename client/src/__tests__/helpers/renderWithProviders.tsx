@@ -40,6 +40,23 @@ export function createTestQueryClient(): QueryClient {
   });
 }
 
+/**
+ * Wrapper + client for `renderHook` on a react-query hook. Replaces the identical
+ * `makeWrapper()` that every queries/* test hand-rolled — one place to add a
+ * provider or tweak client options. Returns the fresh isolated client too so tests
+ * can `jest.spyOn(client, 'invalidateQueries')`.
+ */
+export function createQueryWrapper(queryClient?: QueryClient): {
+  client: QueryClient;
+  wrapper: ({ children }: { children: React.ReactNode }) => React.ReactElement;
+} {
+  const client = queryClient ?? createTestQueryClient();
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  return { client, wrapper };
+}
+
 interface RenderOptions {
   initialEntries?: string[];
   /** Supply a custom client (e.g. one shared with a renderHook wrapper). */

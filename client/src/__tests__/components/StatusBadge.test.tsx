@@ -32,3 +32,33 @@ it('renders a neutral fallback for an unknown status instead of crashing', () =>
   ).not.toThrow()
   expect(screen.getByTestId('unknown-status')).toHaveTextContent('CANCELLED')
 })
+
+// ── Colour signal (data-variant on the underlying Badge span) ──────────────────
+// Text alone doesn't convey urgency; the variant drives the colour + ring so a
+// dropped/renamed mapping (e.g. REJECTED silently rendering green) is caught here.
+
+it('signals PENDING with the warning variant and shows a status icon', () => {
+  render(<StatusBadge status="PENDING" data-testid="badge" />)
+  const badge = screen.getByTestId('badge')
+  expect(badge).toHaveAttribute('data-variant', 'warning')
+  // A recognised status renders its lucide glyph alongside the label.
+  expect(badge.querySelector('svg')).not.toBeNull()
+})
+
+it('signals APPROVED with the success variant', () => {
+  render(<StatusBadge status="APPROVED" data-testid="badge" />)
+  expect(screen.getByTestId('badge')).toHaveAttribute('data-variant', 'success')
+})
+
+it('signals REJECTED with the danger variant', () => {
+  render(<StatusBadge status="REJECTED" data-testid="badge" />)
+  expect(screen.getByTestId('badge')).toHaveAttribute('data-variant', 'danger')
+})
+
+it('uses the neutral secondary variant and no icon for an unknown status', () => {
+  render(<StatusBadge status={'CANCELLED' as Status} data-testid="badge" />)
+  const badge = screen.getByTestId('badge')
+  expect(badge).toHaveAttribute('data-variant', 'secondary')
+  // No config entry → no icon is rendered (only the raw label text).
+  expect(badge.querySelector('svg')).toBeNull()
+})

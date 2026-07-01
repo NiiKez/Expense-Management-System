@@ -1,7 +1,5 @@
-import React from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { createTestQueryClient } from '../helpers/renderWithProviders'
+import { createQueryWrapper } from '../helpers/renderWithProviders'
 import type { Expense, Comment, Receipt } from '../../types'
 import { Category, Status, Role } from '../../types'
 
@@ -18,6 +16,7 @@ import {
   useExpenseComments,
   useCreateExpense,
   useUpdateExpense,
+  useResubmitExpense,
   useDeleteExpense,
   useAddComment,
   fetchReceiptBlob,
@@ -26,14 +25,6 @@ import {
 } from '@/queries/expenses'
 
 const mockedApi = api as jest.Mocked<typeof api>
-
-function makeWrapper() {
-  const client = createTestQueryClient()
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  )
-  return { client, wrapper }
-}
 
 const expense: Expense = {
   id: 7,
@@ -71,7 +62,7 @@ describe('useExpenses', () => {
     mockedApi.get.mockResolvedValueOnce({
       data: { success: true, data: [expense], pagination: { total: 1, page: 1, pageSize: 20 } },
     })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const params: ExpenseListParams = { ...baseParams, search: 'taxi', status: Status.PENDING }
     const { result } = renderHook(() => useExpenses(params), { wrapper })
 
@@ -92,7 +83,7 @@ describe('useExpense', () => {
     mockedApi.get.mockResolvedValueOnce({
       data: { success: true, data: { ...expense, receipts: [receipt] } },
     })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useExpense(7), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -101,7 +92,7 @@ describe('useExpense', () => {
   })
 
   it('is disabled for null / non-positive ids', () => {
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useExpense(null), { wrapper })
     expect(result.current.fetchStatus).toBe('idle')
     expect(mockedApi.get).not.toHaveBeenCalled()
@@ -121,7 +112,7 @@ describe('useExpenseComments', () => {
     const c2: Comment = { ...c1, id: 2, body: 'second', created_at: '2024-02-02T10:00:00Z' }
     // Return out of order; hook should sort ascending.
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: [c2, c1] } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useExpenseComments(7), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -133,7 +124,7 @@ describe('useExpenseComments', () => {
 describe('useCreateExpense', () => {
   it('POSTs FormData and invalidates lists + stats + notifications', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: expense } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const spy = jest.spyOn(client, 'invalidateQueries')
     const { result } = renderHook(() => useCreateExpense(), { wrapper })
 
@@ -155,7 +146,7 @@ describe('useCreateExpense', () => {
 describe('useUpdateExpense', () => {
   it('PUTs the body and invalidates detail(id) + lists + stats', async () => {
     mockedApi.put.mockResolvedValueOnce({ data: { success: true, data: expense } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const spy = jest.spyOn(client, 'invalidateQueries')
     const { result } = renderHook(() => useUpdateExpense(), { wrapper })
 
@@ -169,10 +160,35 @@ describe('useUpdateExpense', () => {
   })
 })
 
+describe('useResubmitExpense', () => {
+  it('POSTs to /resubmit and invalidates detail(id) + lists + admin root + stats + notifications', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: expense } })
+    const { client, wrapper } = createQueryWrapper()
+    const spy = jest.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => useResubmitExpense(), { wrapper })
+
+    result.current.mutate({ id: 7, body: { title: 'Redo' } })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockedApi.post).toHaveBeenCalledWith('/expenses/7/resubmit', { title: 'Redo' })
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    // A resubmit re-enters the pending queue, so it fans out to every list/stat
+    // surface that can show it (lists + admin root + submitter/mgr/admin stats)
+    // plus the detail and the recipient's notifications.
+    expect(keys).toContain(JSON.stringify(expenseKeys.lists))
+    expect(keys).toContain(JSON.stringify(['admin', 'expenses']))
+    expect(keys).toContain(JSON.stringify(expenseKeys.detail(7)))
+    expect(keys).toContain(JSON.stringify(['me', 'stats']))
+    expect(keys).toContain(JSON.stringify(['manager', 'stats']))
+    expect(keys).toContain(JSON.stringify(['admin', 'stats']))
+    expect(keys).toContain(JSON.stringify(['notifications']))
+  })
+})
+
 describe('useDeleteExpense', () => {
   it('DELETEs and invalidates lists + stats', async () => {
     mockedApi.delete.mockResolvedValueOnce({ data: { success: true } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const spy = jest.spyOn(client, 'invalidateQueries')
     const { result } = renderHook(() => useDeleteExpense(), { wrapper })
 
@@ -196,7 +212,7 @@ describe('useAddComment', () => {
       created_at: '2024-02-03T10:00:00Z',
     }
     mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: created } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     // Seed an existing thread to assert append behavior.
     const existing: Comment = { ...created, id: 4, body: 'older', created_at: '2024-02-02T10:00:00Z' }
     client.setQueryData(expenseKeys.comments(7), [existing])

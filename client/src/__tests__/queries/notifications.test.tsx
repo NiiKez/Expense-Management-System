@@ -1,7 +1,5 @@
-import React from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { createTestQueryClient } from '../helpers/renderWithProviders'
+import { createQueryWrapper } from '../helpers/renderWithProviders'
 import type { AppNotification } from '../../types'
 import { NotificationType } from '../../types'
 
@@ -23,14 +21,6 @@ import {
 } from '@/queries/notifications'
 
 const mockedApi = api as jest.Mocked<typeof api>
-
-function makeWrapper() {
-  const client = createTestQueryClient()
-  const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  )
-  return { client, wrapper }
-}
 
 function makeNotification(id: number, isRead: boolean | number): AppNotification {
   return {
@@ -54,7 +44,7 @@ beforeEach(() => jest.clearAllMocks())
 describe('useUnreadCount', () => {
   it('GETs /notifications/unread-count and returns the count number', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: { count: 4 } } })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useUnreadCount(), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -68,7 +58,7 @@ describe('useNotifications', () => {
     mockedApi.get.mockResolvedValueOnce({
       data: { success: true, data: [makeNotification(1, 0), makeNotification(2, 1)], meta: { unread: 1 } },
     })
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     const { result } = renderHook(() => useNotifications(params, { enabled: true }), { wrapper })
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
@@ -78,7 +68,7 @@ describe('useNotifications', () => {
   })
 
   it('does not fetch when not enabled', () => {
-    const { wrapper } = makeWrapper()
+    const { wrapper } = createQueryWrapper()
     renderHook(() => useNotifications(params, { enabled: false }), { wrapper })
     expect(mockedApi.get).not.toHaveBeenCalled()
   })
@@ -87,7 +77,7 @@ describe('useNotifications', () => {
 describe('useMarkNotificationRead', () => {
   it('PATCHes read, optimistically flips item + decrements unread, invalidates', async () => {
     mockedApi.patch.mockResolvedValueOnce({ data: { success: true } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const listKey = notificationKeys.list(params)
     client.setQueryData<NotificationList>(listKey, {
       items: [makeNotification(1, false), makeNotification(2, false)],
@@ -114,7 +104,7 @@ describe('useMarkNotificationRead', () => {
 
   it('rolls back the unread count when the request fails', async () => {
     mockedApi.patch.mockRejectedValueOnce(new Error('boom'))
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     client.setQueryData<number>(notificationKeys.unreadCount, 2)
     client.setQueryData<NotificationList>(notificationKeys.list(params), {
       items: [makeNotification(1, false)],
@@ -127,12 +117,33 @@ describe('useMarkNotificationRead', () => {
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect(client.getQueryData<number>(notificationKeys.unreadCount)).toBe(2)
   })
+
+  it('skips an already-read item in the cached list (guard: no re-flip / no double-decrement)', async () => {
+    mockedApi.patch.mockResolvedValueOnce({ data: { success: true } })
+    const { client, wrapper } = createQueryWrapper()
+    const listKey = notificationKeys.list(params)
+    // #1 is already read; the `target.is_read` guard must leave this list entry
+    // (and its embedded unread tally) untouched rather than decrement again.
+    client.setQueryData<NotificationList>(listKey, {
+      items: [makeNotification(1, true), makeNotification(2, false)],
+      unread: 1,
+    })
+
+    const { result } = renderHook(() => useMarkNotificationRead(), { wrapper })
+    result.current.mutate(1)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockedApi.patch).toHaveBeenCalledWith('/notifications/1/read')
+    const cached = client.getQueryData<NotificationList>(listKey)
+    expect(cached?.unread).toBe(1)
+    expect(cached?.items.map((n) => n.is_read)).toEqual([true, false])
+  })
 })
 
 describe('useMarkAllNotificationsRead', () => {
   it('POSTs read-all, zeroes unread optimistically', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: { success: true } })
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     const listKey = notificationKeys.list(params)
     client.setQueryData<NotificationList>(listKey, {
       items: [makeNotification(1, false), makeNotification(2, false)],
@@ -150,9 +161,24 @@ describe('useMarkAllNotificationsRead', () => {
     expect(mockedApi.post).toHaveBeenCalledWith('/notifications/read-all')
   })
 
+  it('invalidates the unread-count + list-root on settle', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true } })
+    const { client, wrapper } = createQueryWrapper()
+    const spy = jest.spyOn(client, 'invalidateQueries')
+
+    const { result } = renderHook(() => useMarkAllNotificationsRead(), { wrapper })
+    result.current.mutate()
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    // onSettled reconciles the optimistic zeroing with the server.
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(notificationKeys.unreadCount))
+    expect(keys).toContain(JSON.stringify(notificationKeys.listRoot))
+  })
+
   it('rollback clears the optimistic 0 badge when no prior count was cached', async () => {
     mockedApi.post.mockRejectedValueOnce(new Error('boom'))
-    const { client, wrapper } = makeWrapper()
+    const { client, wrapper } = createQueryWrapper()
     client.setQueryData<NotificationList>(notificationKeys.list(params), {
       items: [makeNotification(1, false)],
       unread: 1,

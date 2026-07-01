@@ -78,6 +78,30 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
 }
 
+// Observe a window.location.assign('/login') hard-navigation. jsdom LOCKS location:
+// both `window.location` (a non-configurable accessor) and its `assign` (an own,
+// non-writable, non-configurable method) can be neither spied nor replaced, so the
+// '/login' argument is unobservable. What IS observable is the jsdom "Not implemented:
+// navigation" jsdomError forwarded to console.error — the concrete side-effect of
+// assign(). Counting only navigation errors is strictly stronger than the old
+// `toHaveBeenCalled()` (any stray log satisfied that). NB: the jsdomError comes from
+// jsdom's own realm, so `arg instanceof Error` is false here — match the message string.
+function navMessage(a: unknown): string {
+  const msg = (a as { message?: unknown })?.message;
+  return typeof msg === 'string' ? msg : String(a);
+}
+function captureNavigationErrors() {
+  const calls: unknown[][] = [];
+  const spy = jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    calls.push(args);
+  });
+  return {
+    navErrors: () =>
+      calls.filter((args) => args.some((a) => /navigation/i.test(navMessage(a)))).length,
+    restore: () => spy.mockRestore(),
+  };
+}
+
 // ── Tests (VITE_AUTH_MODE=stub set in setupTests.ts) ───────────────
 
 describe('AuthContext — StubAuthProvider', () => {
@@ -459,10 +483,7 @@ describe('AuthContext — DemoAuthProvider', () => {
     sessionStorage.setItem('demo_token', 'demo-jwt');
     sessionStorage.setItem('active_role', Role.MANAGER);
     mockUseMeReturn = { data: makeUser(), isLoading: false, isError: false };
-    // window.location is non-configurable under jsdom 30, so assign('/login') can't be
-    // spied; it surfaces as a jsdom "Not implemented: navigation" console.error, which
-    // we silence and treat as proof the hard navigation fired.
-    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const nav = captureNavigationErrors();
 
     const { result } = renderHook(() => useAuth(), { wrapper });
 
@@ -472,7 +493,24 @@ describe('AuthContext — DemoAuthProvider', () => {
 
     expect(sessionStorage.getItem('demo_token')).toBeNull(); // clearDemoToken()
     expect(sessionStorage.getItem('active_role')).toBeNull(); // clearStoredActiveRole()
-    expect(errSpy).toHaveBeenCalled(); // window.location.assign('/login')
-    errSpy.mockRestore();
+    // window.location.assign('/login') fired exactly one hard navigation (see
+    // captureNavigationErrors: jsdom locks location so the '/login' arg is
+    // unobservable, but the single navigation side-effect is).
+    expect(nav.navErrors()).toBe(1);
+    nav.restore();
+  });
+
+  it('keeps the session authenticated with a null user while /me is still loading (no data yet)', () => {
+    sessionStorage.setItem('demo_token', 'demo-jwt');
+    // Query enabled, not errored, but data still undefined (first load): exercises
+    // DemoAuthProvider's `data ?? null` right-hand branch — user is null while the
+    // session stays authenticated and reports loading.
+    mockUseMeReturn = { data: undefined, isLoading: true, isError: false };
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.user).toBeNull();
+    expect(result.current.isLoading).toBe(true);
   });
 });

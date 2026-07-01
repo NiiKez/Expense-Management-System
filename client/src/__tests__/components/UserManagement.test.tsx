@@ -108,4 +108,50 @@ describe('UserManagement', () => {
     expect(screen.queryByText('mona@example.com')).not.toBeInTheDocument()
     expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument()
   })
+
+  it('badges the current user\'s own row with "you"', async () => {
+    // beforeEach sets the current user to id 1 (Alice Admin).
+    renderWithProviders(<UserManagement />)
+
+    const aliceRow = (await screen.findByText('Alice Admin')).closest('tr') as HTMLElement
+    expect(within(aliceRow).getByText('you')).toBeInTheDocument()
+
+    // Another user's row carries no self badge.
+    const monaRow = screen.getByText('mona@example.com').closest('tr') as HTMLElement
+    expect(within(monaRow).queryByText('you')).not.toBeInTheDocument()
+  })
+
+  it('renders Active / Inactive status badges per user', async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          mockUser({ id: 1, display_name: 'Alice Admin', email: 'alice@example.com', role: Role.ADMIN, is_active: true }),
+          mockUser({ id: 4, display_name: 'Gone Guy', email: 'gone@example.com', role: Role.EMPLOYEE, is_active: false }),
+        ],
+      },
+    })
+    renderWithProviders(<UserManagement />)
+
+    const activeRow = (await screen.findByText('Alice Admin')).closest('tr') as HTMLElement
+    expect(within(activeRow).getByText('Active')).toBeInTheDocument()
+
+    const inactiveRow = screen.getByText('Gone Guy').closest('tr') as HTMLElement
+    expect(within(inactiveRow).getByText('Inactive')).toBeInTheDocument()
+  })
+
+  it('shows the error state with a Try again button that refetches', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockRejectedValueOnce(new Error('boom'))
+    renderWithProviders(<UserManagement />)
+
+    const retry = await screen.findByRole('button', { name: 'Try again' })
+    expect(screen.getByText('Couldn’t load users')).toBeInTheDocument()
+
+    // From here the request succeeds; Try again must refetch and render rows.
+    mockedGet.mockResolvedValue({ data: { success: true, data: users } })
+    await userEvent.click(retry)
+
+    expect(await screen.findByText('Alice Admin')).toBeInTheDocument()
+  })
 })

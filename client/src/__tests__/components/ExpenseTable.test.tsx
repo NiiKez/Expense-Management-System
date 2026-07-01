@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import ExpenseTable from '@/components/expenses/ExpenseTable'
 import { Status, Category } from '@/types'
@@ -86,5 +86,36 @@ describe('ExpenseTable', () => {
   it('renders em-dash when submitter_name is absent and showSubmitter is true', () => {
     renderTable([mockExpense({ submitter_name: undefined })], true)
     expect(screen.getByText('—')).toBeInTheDocument()
+  })
+})
+
+// ── Formatted cell output ──────────────────────────────────────────────────────
+// The row funnels amount/date/category through the shared formatters; nothing else
+// asserts their rendered output, so a broken formatter wiring would slip through.
+
+describe('ExpenseTable formatted cells', () => {
+  it('renders the formatted amount, category label, and short date for a row', () => {
+    renderTable([
+      mockExpense({
+        id: 5,
+        amount: 320,
+        currency: 'USD',
+        category: Category.TRAVEL,
+        expense_date: '2024-04-10T00:00:00Z',
+      }),
+    ])
+    const row = within(screen.getByTestId('expense-row-5'))
+    // formatCurrency(320, 'USD') → "$320.00"; formatCategory(TRAVEL) → "Travel";
+    // formatDateShort('2024-04-10T00:00:00Z') → "Apr 10, 2024" (TZ pinned to UTC).
+    expect(row.getByText('$320.00')).toBeInTheDocument()
+    expect(row.getByText('Travel')).toBeInTheDocument()
+    expect(row.getByText('Apr 10, 2024')).toBeInTheDocument()
+  })
+
+  it('passes the row currency to the money formatter (non-USD renders its own symbol)', () => {
+    renderTable([mockExpense({ id: 6, amount: 250, currency: 'EUR' })])
+    // A different currency argument yields a different symbol — proves currency is
+    // threaded through, not hardcoded to USD.
+    expect(within(screen.getByTestId('expense-row-6')).getByText('€250.00')).toBeInTheDocument()
   })
 })

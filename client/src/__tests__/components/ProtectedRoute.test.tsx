@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ProtectedRoute from '../../components/common/ProtectedRoute';
 import { Role } from '../../types';
@@ -153,6 +154,35 @@ describe('ProtectedRoute', () => {
 
       expect(screen.getByText('Home Page')).toBeInTheDocument();
       expect(screen.queryByText('Admin Content')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('authenticated but profile failed to load', () => {
+    it('shows the recovery UI and signs out on demand', async () => {
+      const logout = jest.fn();
+      // Authenticated, isLoading resolved, but the /me profile fetch yielded null —
+      // the guard must offer a way out instead of a dead-end.
+      mockUseAuth.mockReturnValue({
+        user: null,
+        isAuthenticated: true,
+        isLoading: false,
+        login: jest.fn(),
+        logout,
+        switchRole: jest.fn(),
+      });
+
+      renderRoute(
+        <ProtectedRoute>
+          <div>Protected Content</div>
+        </ProtectedRoute>
+      );
+
+      expect(screen.getByText('Unable to load your profile.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+      expect(logout).toHaveBeenCalledTimes(1);
     });
   });
 
