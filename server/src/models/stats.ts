@@ -82,14 +82,16 @@ export const statsModel = {
 
   // demoSessionId scopes every aggregate to a single demo workspace so a demo
   // admin's dashboard reflects only its own seeded data, never real org-wide
-  // figures. Unset (real admin) leaves the queries org-wide / unchanged.
+  // figures. Unset (real admin) scopes to real rows only, so seeded demo data
+  // never inflates the owner's org-wide figures.
   async getOrgStats(demoSessionId?: string): Promise<AdminStats> {
     // Constrain expenses to the workspace's submitters; users to the workspace
-    // members. Parametrised, so the session id never touches the SQL string.
+    // members. Parametrised, so the session id never touches the SQL string. For
+    // a real admin the same shape excludes demo submitters/members instead.
     const expScope = demoSessionId
       ? 'AND submitted_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)'
-      : '';
-    const userScope = demoSessionId ? 'AND is_demo = TRUE AND demo_session_id = ?' : '';
+      : 'AND submitted_by IN (SELECT id FROM users WHERE is_demo = FALSE)';
+    const userScope = demoSessionId ? 'AND is_demo = TRUE AND demo_session_id = ?' : 'AND is_demo = FALSE';
     const p = demoSessionId ? [demoSessionId] : [];
 
     const [[org]] = await pool.execute<RowDataPacket[]>(
@@ -107,7 +109,7 @@ export const statsModel = {
        FROM expenses WHERE deleted_at IS NULL ${expScope} GROUP BY category`, p);
     const monthlySql = demoSessionId
       ? MONTHLY_SQL.replace('{scope}', 'submitted_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)')
-      : MONTHLY_SQL.replace('AND {scope}', '');
+      : MONTHLY_SQL.replace('{scope}', 'submitted_by IN (SELECT id FROM users WHERE is_demo = FALSE)');
     const [monthly] = await pool.execute<RowDataPacket[]>(monthlySql, p);
     return {
       orgSpendMonth: num(org.t), pendingOrgWide: num(pending.c), activeUsers: num(users.c),

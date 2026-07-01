@@ -480,6 +480,10 @@ export const expenseModel = {
     if (options.demoSessionId) {
       conditions.push('u.is_demo = TRUE AND u.demo_session_id = ?');
       params.push(options.demoSessionId);
+    } else {
+      // Real admin: exclude demo-workspace rows so the org ledger isn't polluted
+      // by seeded demo data (the demo path above is the only reader of demo rows).
+      conditions.push('u.is_demo = FALSE');
     }
     if (options.status) {
       conditions.push('e.status = ?');
@@ -541,11 +545,22 @@ export const expenseModel = {
       date_to?: string;
       sort?: string;
       order?: string;
+      // Same demo semantics as findAll: a real admin exports only real rows; a
+      // (denyDemo-blocked, defense-in-depth) demo caller would get only its own
+      // workspace. Keeps exports fail-closed like the reads rather than resting
+      // solely on the route's denyDemo guard.
+      demoSessionId?: string;
     } = {},
   ): Promise<{ data: Expense[]; capped: boolean }> {
     const conditions: string[] = ['e.deleted_at IS NULL'];
     const params: (string | number)[] = [];
 
+    if (options.demoSessionId) {
+      conditions.push('u.is_demo = TRUE AND u.demo_session_id = ?');
+      params.push(options.demoSessionId);
+    } else {
+      conditions.push('u.is_demo = FALSE');
+    }
     if (options.status) {
       conditions.push('e.status = ?');
       params.push(options.status);

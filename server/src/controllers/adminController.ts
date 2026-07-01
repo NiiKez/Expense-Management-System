@@ -131,6 +131,8 @@ export const exportAllExpenses = async (req: Request, res: Response, next: NextF
       date_to: parsedDateTo,
       sort: parsedSort,
       order: parsedOrder,
+      // Backstop the route's denyDemo guard at the query layer.
+      demoSessionId: demoScope(req),
     });
 
     if (capped) {
@@ -177,6 +179,8 @@ export const exportAuditLogs = async (req: Request, res: Response, next: NextFun
       date_to: parsedDateTo,
       sort: parsedSort,
       order: parsedOrder,
+      // Backstop the route's denyDemo guard at the query layer.
+      demoSessionId: demoScope(req),
     });
 
     if (capped) {

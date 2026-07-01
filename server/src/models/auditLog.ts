@@ -93,6 +93,11 @@ export const auditLogModel = {
         'performed_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)',
       );
       params.push(filters.demoSessionId);
+    } else {
+      // Real admin: exclude demo-performed rows so the org audit trail isn't
+      // polluted with seeded demo activity (performed_by is NOT NULL, so every
+      // audit row maps to exactly one user and this can't drop system rows).
+      conditions.push('performed_by IN (SELECT id FROM users WHERE is_demo = FALSE)');
     }
     if (filters.expense_id !== undefined) {
       conditions.push('expense_id = ?');
@@ -152,10 +157,20 @@ export const auditLogModel = {
     date_to?: string;
     sort?: string;
     order?: string;
+    // Same demo semantics as findAll: a real admin exports only real activity; a
+    // (denyDemo-blocked, defense-in-depth) demo caller would get only its own
+    // workspace's trail.
+    demoSessionId?: string;
   }): Promise<{ data: AuditLogExportRow[]; capped: boolean }> {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
+    if (filters.demoSessionId) {
+      conditions.push('u.is_demo = TRUE AND u.demo_session_id = ?');
+      params.push(filters.demoSessionId);
+    } else {
+      conditions.push('u.is_demo = FALSE');
+    }
     if (filters.expense_id !== undefined) {
       conditions.push('a.expense_id = ?');
       params.push(filters.expense_id);

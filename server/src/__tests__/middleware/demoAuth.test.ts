@@ -129,4 +129,71 @@ describe('authenticate demo auth', () => {
     expect(req.user).toBeUndefined();
     expect(mockedUserModel.findById).not.toHaveBeenCalled();
   });
+
+  it('rejects a demo token whose user row is deactivated', async () => {
+    mockedUserModel.findById.mockResolvedValue(demoUser({ is_active: false }));
+    const req = reqWithToken(signDemo({ sub: '42', demo: true, role: Role.MANAGER }));
+
+    await authenticate(req, {} as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number; message?: string };
+    expect(err.statusCode).toBe(401);
+    expect(err.message).toBe('User account is deactivated');
+    expect(req.user).toBeUndefined();
+  });
+
+  it.each(['abc', '0', '-4', '1.5'])(
+    'rejects a demo token with a non-positive-integer sub (%p) without a DB lookup',
+    async (sub) => {
+      const req = reqWithToken(signDemo({ sub, demo: true, role: Role.MANAGER }));
+
+      await authenticate(req, {} as Response, next);
+
+      const err = next.mock.calls[0][0] as { statusCode?: number; message?: string };
+      expect(err.statusCode).toBe(401);
+      expect(err.message).toBe('Invalid demo token');
+      expect(mockedUserModel.findById).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a demo token whose user row was already reaped', async () => {
+    mockedUserModel.findById.mockResolvedValue(null);
+    const req = reqWithToken(signDemo({ sub: '42', demo: true, role: Role.MANAGER }));
+
+    await authenticate(req, {} as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number; message?: string };
+    expect(err.statusCode).toBe(401);
+    expect(err.message).toBe('Demo session is no longer valid');
+    expect(req.user).toBeUndefined();
+  });
+
+  it('maps a null demo_session_id to an undefined demoSessionId (so demoScope fails closed)', async () => {
+    mockedUserModel.findById.mockResolvedValue(demoUser({ demo_session_id: null }));
+    const req = reqWithToken(signDemo({ sub: '42', demo: true, role: Role.MANAGER }));
+
+    await authenticate(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user?.demoMode).toBe(true);
+    expect(req.user?.demoSessionId).toBeUndefined();
+  });
+
+  it('falls through to Entra for a token not signed by the demo secret', async () => {
+    // A token signed with a different secret can't be a demo token; it must not be
+    // treated as one, and no demo DB lookup should happen — it falls to Entra auth
+    // (which then rejects the non-RS256 token).
+    const foreign = jwt.sign({ sub: '42', demo: true, role: Role.MANAGER }, 'a-different-secret', {
+      algorithm: 'HS256',
+      expiresIn: 3600,
+    });
+    const req = reqWithToken(foreign);
+
+    await authenticate(req, {} as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number };
+    expect(err.statusCode).toBe(401);
+    expect(req.user).toBeUndefined();
+    expect(mockedUserModel.findById).not.toHaveBeenCalled();
+  });
 });

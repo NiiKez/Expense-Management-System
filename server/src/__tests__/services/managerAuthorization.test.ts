@@ -187,6 +187,19 @@ describe('managerAuthorization', () => {
         expect(result.allowed).toBe(false);
         expect(result.reason).toContain('could not be verified from the local cache');
       });
+
+      it('DENIES a demo session when the submitter row does not exist', async () => {
+        // The demo branch runs before the ADMIN bypass, so a demo ADMIN pointed at
+        // a missing/guessed id is denied at the workspace check, never allowed.
+        mockedUserModel.findById.mockResolvedValue(null);
+        const req = mockRequest({ user: demoAdmin('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe('Expense submitter not found');
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
     });
 
     describe('submitter not found', () => {

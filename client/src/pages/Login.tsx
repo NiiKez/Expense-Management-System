@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -6,6 +6,7 @@ import { IS_DEMO_ENABLED, IS_STUB_AUTH_MODE } from '../services/env'
 import { STUB_USERS } from '../context/stubUsers'
 import api from '../services/api'
 import { storeDemoToken } from '../services/demoAuth'
+import { clearStoredActiveRole } from '../services/activeRole'
 import { Role } from '../types'
 import type { User } from '../types'
 import { Button } from '../components/ui/button'
@@ -20,22 +21,48 @@ const DEMO_ACCOUNTS: AccountPickerItem[] = [
   { key: Role.EMPLOYEE, name: 'Jordan Lee', subtitle: 'Submits expenses', role: Role.EMPLOYEE, testId: 'demo-login-EMPLOYEE' },
 ]
 
+// Map a failed demo-login into a message the visitor can act on. The server
+// returns distinct, user-safe messages for the two expected conditions —
+// 503 "at capacity" and 403 "demo disabled" — so surface those instead of a
+// blanket "try again" that misleads when retrying can't help.
+function demoLoginErrorMessage(err: unknown): string {
+  const response = (err as { response?: { status?: number; data?: { error?: { message?: string } } } })?.response
+  const serverMessage = response?.data?.error?.message
+  if (response?.status === 503) {
+    return serverMessage ?? 'The demo is at capacity right now. Please try again shortly.'
+  }
+  if (response?.status === 403) {
+    return serverMessage ?? 'The demo is not available right now.'
+  }
+  return 'Could not start the demo right now. Please try again.'
+}
+
 export default function Login() {
   const { isAuthenticated, isLoading, login } = useAuth()
   const [demoPending, setDemoPending] = useState<Role | null>(null)
   const [demoError, setDemoError] = useState<string | null>(null)
+  // Synchronous re-entrancy guard: the AccountPicker only disables after a
+  // re-render, so two clicks in the same tick could otherwise both fire and
+  // provision two demo workspaces (one orphaned against the capacity cap).
+  const submittingRef = useRef(false)
 
   const handleDemoLogin = async (role: Role) => {
+    if (submittingRef.current) return
+    submittingRef.current = true
     setDemoError(null)
     setDemoPending(role)
     try {
       const res = await api.post<{ data: { token: string } }>('/auth/demo-login', { role })
+      // Drop any stale acting-as role left by a prior MSAL session so it can't
+      // ride along on demo requests (the server ignores it, but keep it tidy).
+      clearStoredActiveRole()
       storeDemoToken(res.data.data.token)
       // Full navigation so AuthProvider re-evaluates and mounts the demo session.
       window.location.assign('/')
-    } catch {
-      setDemoError('Could not start the demo right now. Please try again.')
+    } catch (err) {
+      setDemoError(demoLoginErrorMessage(err))
       setDemoPending(null)
+      submittingRef.current = false
     }
   }
 

@@ -161,24 +161,31 @@ describe('signDemoToken', () => {
 });
 
 describe('reapExpiredDemoWorkspaces', () => {
-  it('deletes expired demo rows in FK-safe order and returns the count', async () => {
+  it('selects whole expired workspaces and deletes in strict FK-safe order', async () => {
     const conn = fakeConnection();
     conn.query
-      .mockResolvedValueOnce([[{ id: 11 }, { id: 12 }]]) // SELECT expired ids
-      .mockResolvedValue([{}]); // the three DELETEs
+      .mockResolvedValueOnce([[{ id: 11 }, { id: 12 }]]) // SELECT user ids of expired sessions
+      .mockResolvedValue([{}]); // the four DELETEs
     mockedPool.getConnection.mockResolvedValue(conn);
 
     await expect(reapExpiredDemoWorkspaces()).resolves.toBe(2);
 
     const statements = conn.query.mock.calls.map((c) => String(c[0]));
-    expect(statements.some((s) => /DELETE FROM audit_logs/.test(s))).toBe(true);
-    expect(statements.some((s) => /DELETE FROM expenses/.test(s))).toBe(true);
-    expect(statements.some((s) => /DELETE FROM security_events/.test(s))).toBe(true);
-    expect(statements.some((s) => /DELETE FROM users/.test(s))).toBe(true);
-    // security_events must be cleared BEFORE the users delete (FK-safe ordering).
+    // The id selection is by whole demo_session_id, never a raw per-user LIMIT —
+    // so a batch boundary can never split a workspace and RESTRICT-wedge the tick.
+    expect(statements[0]).toMatch(/demo_session_id IN \(/);
+    expect(statements[0]).toMatch(/demo_expires_at < NOW\(\)/);
+    expect(statements[0]).not.toMatch(/FROM users WHERE is_demo = TRUE AND demo_expires_at < NOW\(\) LIMIT/);
+
+    const auditIdx = statements.findIndex((s) => /DELETE FROM audit_logs/.test(s));
+    const expensesIdx = statements.findIndex((s) => /DELETE FROM expenses/.test(s));
     const secIdx = statements.findIndex((s) => /DELETE FROM security_events/.test(s));
     const usersIdx = statements.findIndex((s) => /DELETE FROM users/.test(s));
-    expect(secIdx).toBeGreaterThanOrEqual(0);
+    // audit_logs → expenses → security_events → users: any reordering would trip a
+    // FK RESTRICT, so assert the full chain rather than just one pair.
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(auditIdx).toBeLessThan(expensesIdx);
+    expect(expensesIdx).toBeLessThan(secIdx);
     expect(secIdx).toBeLessThan(usersIdx);
     expect(conn.commit).toHaveBeenCalledTimes(1);
     expect(conn.release).toHaveBeenCalledTimes(1);
@@ -209,22 +216,50 @@ describe('startDemoCleanup', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('schedules a reaper and returns an idempotent stop function', () => {
+  it('schedules a reaper and returns an idempotent stop function', async () => {
+    const conn = fakeConnection();
+    conn.query.mockResolvedValue([[]]); // immediate tick reaps nothing
+    mockedPool.getConnection.mockResolvedValue(conn);
     const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
     const stop = startDemoCleanup(1000);
+    await jest.advanceTimersByTimeAsync(0); // let the immediate tick settle
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
     expect(typeof stop).toBe('function');
     stop();
-    stop(); // second call hits the already-cleared guard
+    stop(); // second call is a harmless no-op (clearInterval is idempotent)
   });
 
-  it('logs the reaped count on a tick that removes rows', async () => {
+  it('reaps immediately on start (before the first interval elapses)', async () => {
     const conn = fakeConnection();
     conn.query.mockResolvedValueOnce([[{ id: 1 }]]).mockResolvedValue([{}]);
     mockedPool.getConnection.mockResolvedValue(conn);
 
     const stop = startDemoCleanup(1000);
+    // No timer advance: the eager tick must run so a scale-to-zero cold start (or
+    // a boot-time backlog) is reaped even if the container never lives an interval.
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(mockedPool.getConnection).toHaveBeenCalledTimes(1);
+    expect(mockedLogger.info).toHaveBeenCalledWith(
+      'Demo cleanup: reaped expired demo users',
+      { count: 1 },
+    );
+    stop();
+  });
+
+  it('logs the reaped count on a scheduled tick that removes rows', async () => {
+    const conn = fakeConnection();
+    conn.query.mockResolvedValue([[]]); // immediate tick: nothing to reap
+    mockedPool.getConnection.mockResolvedValue(conn);
+
+    const stop = startDemoCleanup(1000);
+    await jest.advanceTimersByTimeAsync(0);
+
+    // A later interval tick now finds an expired workspace.
+    conn.query.mockReset();
+    conn.query.mockResolvedValueOnce([[{ id: 1 }]]).mockResolvedValue([{}]);
     await jest.advanceTimersByTimeAsync(1000);
 
     expect(mockedLogger.info).toHaveBeenCalledWith(
@@ -234,11 +269,11 @@ describe('startDemoCleanup', () => {
     stop();
   });
 
-  it('logs an error when a tick fails', async () => {
-    mockedPool.getConnection.mockRejectedValueOnce(new Error('boom'));
+  it('logs an error when a tick fails without unscheduling the reaper', async () => {
+    mockedPool.getConnection.mockRejectedValue(new Error('boom'));
 
     const stop = startDemoCleanup(1000);
-    await jest.advanceTimersByTimeAsync(1000);
+    await jest.advanceTimersByTimeAsync(0); // immediate tick fails
 
     expect(mockedLogger.error).toHaveBeenCalledWith('Demo cleanup failed', expect.any(Object));
     stop();

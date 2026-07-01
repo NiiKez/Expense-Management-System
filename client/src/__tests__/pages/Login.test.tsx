@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Routes, Route } from 'react-router-dom'
 import { renderWithProviders, makeMockAuthValue } from '../helpers/renderWithProviders'
@@ -190,6 +190,84 @@ describe('Login', () => {
       await waitFor(() => expect(card).toBeDisabled())
 
       errSpy.mockRestore()
+    })
+
+    // The server error envelope is { success:false, error:{ message } }. For the two
+    // expected, user-actionable conditions (503 at-capacity, 403 demo-disabled) the
+    // handler surfaces the server's own message; anything else gets a generic retry line.
+    describe('demo-login failures', () => {
+      beforeEach(() => {
+        mockStubAuthMode = false
+        mockDemoEnabled = true
+      })
+
+      it('surfaces the server message on a 503 (at capacity) rejection', async () => {
+        const user = userEvent.setup()
+        setAuth()
+        mockApiPost.mockRejectedValueOnce({
+          response: {
+            status: 503,
+            data: { error: { message: 'The demo is at capacity right now. Please try again shortly.' } },
+          },
+        })
+
+        renderWithProviders(<Login />)
+        await user.click(screen.getByTestId('demo-login-MANAGER'))
+
+        expect(
+          await screen.findByText('The demo is at capacity right now. Please try again shortly.'),
+        ).toBeInTheDocument()
+      })
+
+      it('surfaces the server message on a 403 (demo disabled) rejection', async () => {
+        const user = userEvent.setup()
+        setAuth()
+        mockApiPost.mockRejectedValueOnce({
+          response: {
+            status: 403,
+            data: { error: { message: 'The demo is not available right now.' } },
+          },
+        })
+
+        renderWithProviders(<Login />)
+        await user.click(screen.getByTestId('demo-login-ADMIN'))
+
+        expect(await screen.findByText('The demo is not available right now.')).toBeInTheDocument()
+      })
+
+      it('shows the generic message and re-enables the picker on a network error (no response)', async () => {
+        const user = userEvent.setup()
+        setAuth()
+        mockApiPost.mockRejectedValueOnce(new Error('Network Error'))
+
+        renderWithProviders(<Login />)
+        const card = screen.getByTestId('demo-login-EMPLOYEE')
+        await user.click(card)
+
+        expect(
+          await screen.findByText('Could not start the demo right now. Please try again.'),
+        ).toBeInTheDocument()
+        // pending cleared + submittingRef reset ⇒ the picker is usable again.
+        expect(card).not.toBeDisabled()
+      })
+
+      it('fires a single demo-login request when the same persona is double-clicked', async () => {
+        setAuth()
+        // Success path navigates via window.location.assign('/'); jsdom emits a
+        // "Not implemented: navigation" console.error we silence (see the POST test).
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+
+        renderWithProviders(<Login />)
+        const card = screen.getByTestId('demo-login-MANAGER')
+        // Two rapid clicks: the first locks the picker (pending) and flips the
+        // synchronous submittingRef guard, so the second cannot start a second
+        // workspace-provisioning POST.
+        fireEvent.click(card)
+        fireEvent.click(card)
+
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1))
+        errSpy.mockRestore()
+      })
     })
   })
 })
