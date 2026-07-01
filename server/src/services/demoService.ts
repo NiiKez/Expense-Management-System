@@ -41,7 +41,12 @@ async function insertDemoUser(
   },
 ): Promise<number> {
   const entraId = randomUUID(); // 36 chars — fits users.entra_id and is globally unique
-  const email = `${params.emailLocal}.${params.sessionId.slice(0, 6)}@demo.local`;
+  // Use the FULL session id (not a 6-char slice) so the address is globally
+  // unique: emailLocal is unique per role and sessionId is unique per workspace,
+  // so the pair can never collide against the uk_email UNIQUE key. A short slice
+  // risked a birthday collision as the live+unreaped demo-user population grew,
+  // which would fail the INSERT and 500 the visitor.
+  const email = `${params.emailLocal}.${params.sessionId}@demo.local`;
   const [result] = await conn.execute<ResultSetHeader>(
     `INSERT INTO users
        (entra_id, email, display_name, role, manager_id, is_demo, demo_expires_at, demo_session_id)
@@ -221,6 +226,14 @@ export function signDemoToken(userId: number, role: Role): string {
  * on the expense), then security_events for those demo users (FK is SET NULL so
  * it wouldn't block, but clearing them prevents orphaned rows accumulating),
  * then the demo users themselves (their remaining child rows cascade).
+ *
+ * The batch is bounded by whole WORKSPACES, not raw user rows: we pick up to 200
+ * expired demo_session_ids and delete every user of those sessions together. A
+ * per-user LIMIT could split a workspace across the batch boundary — leaving an
+ * approver's APPROVED/REJECTED audit row (performer not in the batch) still
+ * pointing at an expense we try to delete, which the audit_logs→expenses RESTRICT
+ * would reject, rolling back the whole tick and wedging the reaper as the backlog
+ * grows. Selecting entire sessions makes that split impossible.
  */
 export async function reapExpiredDemoWorkspaces(): Promise<number> {
   const conn = await pool.getConnection();
@@ -228,7 +241,18 @@ export async function reapExpiredDemoWorkspaces(): Promise<number> {
     await conn.beginTransaction();
 
     const [rows] = await conn.query<RowDataPacket[]>(
-      `SELECT id FROM users WHERE is_demo = TRUE AND demo_expires_at < NOW() LIMIT 500`,
+      `SELECT id FROM users
+        WHERE is_demo = TRUE
+          AND demo_session_id IN (
+            SELECT demo_session_id FROM (
+              SELECT DISTINCT demo_session_id
+                FROM users
+               WHERE is_demo = TRUE
+                 AND demo_expires_at < NOW()
+                 AND demo_session_id IS NOT NULL
+               LIMIT 200
+            ) AS expired_sessions
+          )`,
     );
     const ids = rows.map((r) => (r as { id: number }).id);
     if (ids.length === 0) {
@@ -252,8 +276,6 @@ export async function reapExpiredDemoWorkspaces(): Promise<number> {
   }
 }
 
-let cleanupTimer: NodeJS.Timeout | null = null;
-
 /** Start the periodic demo reaper. Returns a stop function for graceful shutdown. */
 export function startDemoCleanup(intervalMs = 15 * 60 * 1000): () => void {
   const tick = (): void => {
@@ -266,14 +288,19 @@ export function startDemoCleanup(intervalMs = 15 * 60 * 1000): () => void {
       });
   };
 
-  cleanupTimer = setInterval(tick, intervalMs);
-  cleanupTimer.unref(); // never keep the process alive for the reaper alone
+  // Reap once immediately. setInterval fires the first tick only after a full
+  // interval, and the deployment is scale-to-zero, so the container can be killed
+  // before it stays up 15 min — without an eager tick a cold start would never
+  // reap and expired rows would accumulate. Also clears any boot-time backlog.
+  tick();
+
+  // Local (not module-level) so repeated calls each own their timer instead of
+  // leaking the previous interval.
+  const timer = setInterval(tick, intervalMs);
+  timer.unref(); // never keep the process alive for the reaper alone
   logger.info('Demo cleanup scheduled', { intervalMs });
 
   return () => {
-    if (cleanupTimer) {
-      clearInterval(cleanupTimer);
-      cleanupTimer = null;
-    }
+    clearInterval(timer); // idempotent — a second call is a harmless no-op
   };
 }

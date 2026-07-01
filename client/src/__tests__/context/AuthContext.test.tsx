@@ -403,3 +403,76 @@ describe('AuthContext — MsalAuthProvider', () => {
     expect(sessionStorage.getItem('active_role')).toBe(Role.EMPLOYEE);
   });
 });
+
+// ── DemoAuthProvider (public demo session, IS_STUB_AUTH_MODE off + demo token) ──
+//
+// AuthProvider order is stub → demo → MSAL: with stub mode off and a demo token in
+// sessionStorage (the real demoAuth module is unmocked, so setting the key is enough),
+// AuthProvider mounts DemoAuthProvider. mockIsAuthenticated stays false so a picked
+// MsalAuthProvider would report isAuthenticated:false — making a `true` result proof
+// the demo provider (not MSAL) was chosen. DemoAuthProvider uses neither useMsal nor
+// useQueryClient, so the plain <AuthProvider> wrapper (no QueryClientProvider) suffices.
+
+describe('AuthContext — DemoAuthProvider', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    mockIsStubAuthMode = false;
+    mockIsAuthenticated = false;
+    mockUseMeReturn = { data: undefined, isLoading: false, isError: false };
+  });
+
+  afterEach(() => {
+    // Restore stub mode for any later suites sharing this module instance.
+    mockIsStubAuthMode = true;
+  });
+
+  it('AuthProvider selects the demo provider when a demo token is stored (stub off)', () => {
+    sessionStorage.setItem('demo_token', 'demo-jwt');
+    mockUseMeReturn = {
+      data: makeUser({ id: 55, display_name: 'Demo Admin', role: Role.ADMIN }),
+      isLoading: false,
+      isError: false,
+    };
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    // isAuthenticated:true while mockIsAuthenticated is false proves DemoAuthProvider
+    // (whose authenticated state is "we hold a demo token"), not MsalAuthProvider.
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.user?.id).toBe(55);
+    expect(result.current.user?.role).toBe(Role.ADMIN);
+  });
+
+  it('stays authenticated when the /me fetch errors — user null, no bounce to login', () => {
+    sessionStorage.setItem('demo_token', 'demo-jwt');
+    mockUseMeReturn = { data: undefined, isLoading: false, isError: true };
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    // The key fix: a non-401 /me failure does NOT flip isAuthenticated to false, so
+    // ProtectedRoute shows its in-place retry screen instead of returning to /login.
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.user).toBeNull();
+  });
+
+  it('logout clears the demo token + active role and hard-navigates to /login', () => {
+    sessionStorage.setItem('demo_token', 'demo-jwt');
+    sessionStorage.setItem('active_role', Role.MANAGER);
+    mockUseMeReturn = { data: makeUser(), isLoading: false, isError: false };
+    // window.location is non-configurable under jsdom 30, so assign('/login') can't be
+    // spied; it surfaces as a jsdom "Not implemented: navigation" console.error, which
+    // we silence and treat as proof the hard navigation fired.
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    act(() => {
+      result.current.logout();
+    });
+
+    expect(sessionStorage.getItem('demo_token')).toBeNull(); // clearDemoToken()
+    expect(sessionStorage.getItem('active_role')).toBeNull(); // clearStoredActiveRole()
+    expect(errSpy).toHaveBeenCalled(); // window.location.assign('/login')
+    errSpy.mockRestore();
+  });
+});

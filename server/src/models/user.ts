@@ -43,7 +43,11 @@ export const userModel = {
     //
     // When demoSessionId is set the caller is a demo admin, so restrict the list
     // to that one demo workspace's users — never real users or other workspaces.
-    const where = demoSessionId ? 'WHERE is_demo = TRUE AND demo_session_id = ?' : '';
+    // Otherwise the caller is a real admin: exclude demo rows so the org directory
+    // isn't polluted with seeded demo users.
+    const where = demoSessionId
+      ? 'WHERE is_demo = TRUE AND demo_session_id = ?'
+      : 'WHERE is_demo = FALSE';
     const params: (string | number)[] = demoSessionId
       ? [demoSessionId, MAX_USER_LIST + 1]
       : [MAX_USER_LIST + 1];

@@ -150,7 +150,13 @@ function DemoAuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       user,
-      isAuthenticated: !!user,
+      // Holding a demo token IS the authenticated state (this provider only
+      // mounts when one is stored) — kept separate from whether the /me profile
+      // loaded, mirroring MsalAuthProvider. So a non-401 /me failure (e.g. the
+      // scale-to-zero DB waking up) surfaces ProtectedRoute's in-place retry
+      // screen instead of bouncing a still-valid session back to the picker. A
+      // genuinely dead token 401s and the api interceptor clears it + redirects.
+      isAuthenticated: true,
       isLoading,
       login: async () => {},
       logout,

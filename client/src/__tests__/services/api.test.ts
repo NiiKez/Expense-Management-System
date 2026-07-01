@@ -186,6 +186,26 @@ describe('api service', () => {
 
       expect((result as typeof config).headers['X-Active-Role']).toBeUndefined();
     });
+
+    // Demo precedence over stub: a stored demo token is checked BEFORE the stub
+    // branch, so even in stub mode it wins — the request carries the demo Bearer
+    // and never the X-Stub-User-Id header. demoAuth is the real sessionStorage-backed
+    // module here (only services/auth is mocked at the top), so setting the key is enough.
+    it('prefers a stored demo token over the stub user id (Bearer, no X-Stub-User-Id)', async () => {
+      sessionStorage.setItem('stub_user_id', '5');
+      sessionStorage.setItem('demo_token', 'demo-tok-1');
+
+      const handlers = (api.interceptors.request as unknown as {
+        handlers: Array<{ fulfilled: (config: Record<string, unknown>) => unknown }>;
+      }).handlers;
+      const interceptor = handlers[handlers.length - 1]!.fulfilled;
+
+      const config = { headers: {} as Record<string, string> };
+      const result = await interceptor(config);
+
+      expect((result as typeof config).headers.Authorization).toBe('Bearer demo-tok-1');
+      expect((result as typeof config).headers['X-Stub-User-Id']).toBeUndefined();
+    });
   });
 
   // ── Production MSAL path (IS_STUB_AUTH_MODE forced false) ──────────
@@ -310,6 +330,59 @@ describe('api service', () => {
 
       await expect(rejected(error500)).rejects.toBe(error500);
       expect(msalInstance.acquireTokenRedirect).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Demo-session interceptors (production path) ───────────────────
+  // demoAuth is the real sessionStorage-backed module (loadMsalApi only doMocks
+  // env + auth), so a stored `demo_token` drives the demo branch of both
+  // interceptors. NB: window.location is non-configurable under jsdom 30, so
+  // assign('/login') can't be spied; it surfaces as a jsdom "Not implemented:
+  // navigation" console.error, which we silence and treat as proof the redirect
+  // fired — the same navigation-side-effect pattern Login.test.tsx relies on.
+  describe('demo-session interceptors (production path)', () => {
+    it('attaches the demo Bearer and short-circuits MSAL (no acquireTokenSilent)', async () => {
+      const { api: msalApi, msalInstance } = await loadMsalApi();
+      // An active account exists, so MSAL WOULD run if the demo branch didn't win.
+      msalInstance.getActiveAccount.mockReturnValue({ homeAccountId: 'acc-1' });
+      sessionStorage.setItem('demo_token', 'demo-jwt-abc');
+
+      const interceptor = getRequestInterceptor(msalApi);
+      const result = await interceptor({ headers: {} });
+
+      expect(result.headers.Authorization).toBe('Bearer demo-jwt-abc');
+      expect(msalInstance.acquireTokenSilent).not.toHaveBeenCalled();
+      expect(result.headers['X-Stub-User-Id']).toBeUndefined();
+    });
+
+    it('clears the demo token and redirects to /login on a 401 response', async () => {
+      const { api: msalApi, msalInstance } = await loadMsalApi();
+      sessionStorage.setItem('demo_token', 'demo-jwt-abc');
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const rejected = getResponseRejectedHandler(msalApi);
+      // The demo 401 branch runs synchronously (no await before assign) then returns
+      // a never-resolving promise (page navigating away), so don't await it — just
+      // guard against a stray rejection crashing the worker.
+      const pending = rejected({ response: { status: 401 } });
+      pending.catch(() => {});
+
+      expect(sessionStorage.getItem('demo_token')).toBeNull(); // clearDemoToken() ran
+      expect(errSpy).toHaveBeenCalled(); // window.location.assign('/login') attempted
+      // Demo sessions never fall through to MSAL's silent-reauth redirect.
+      expect(msalInstance.acquireTokenRedirect).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it('rejects a non-401 demo error with the original error and keeps the token', async () => {
+      const { api: msalApi } = await loadMsalApi();
+      sessionStorage.setItem('demo_token', 'demo-jwt-abc');
+      const rejected = getResponseRejectedHandler(msalApi);
+      const error500 = { response: { status: 500 } };
+
+      await expect(rejected(error500)).rejects.toBe(error500);
+      // A transient (e.g. DB waking) error must NOT nuke a still-valid demo session.
+      expect(sessionStorage.getItem('demo_token')).toBe('demo-jwt-abc');
     });
   });
 });

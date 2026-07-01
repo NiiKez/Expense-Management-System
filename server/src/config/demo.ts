@@ -12,12 +12,21 @@ export function getDemoSecret(): string | undefined {
   return process.env.DEMO_JWT_SECRET;
 }
 
+// Read a strictly-positive integer env var, falling back when it is unset, blank,
+// non-numeric, or <= 0. Guards the demo knobs against silently-broken configs:
+// a 0/negative TTL would mint dead-on-arrival tokens, and a 0/negative cap would
+// wedge every demo-login at "at capacity".
+function positiveIntFromEnv(value: string | undefined, fallback: number): number {
+  const parsed = intFromEnv(value, fallback);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 // Lifetime of a demo workspace (token TTL and the user-row demo_expires_at).
 export function getDemoTtlSeconds(): number {
-  return intFromEnv(process.env.DEMO_SESSION_TTL_SECONDS, 2 * 60 * 60); // 2 hours
+  return positiveIntFromEnv(process.env.DEMO_SESSION_TTL_SECONDS, 2 * 60 * 60); // 2 hours
 }
 
 // Cap on concurrent live demo workspaces, to bound seeding load and storage.
 export function getDemoMaxActive(): number {
-  return intFromEnv(process.env.DEMO_MAX_ACTIVE, 50);
+  return positiveIntFromEnv(process.env.DEMO_MAX_ACTIVE, 50);
 }

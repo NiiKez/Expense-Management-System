@@ -233,6 +233,58 @@ describe('approvalController.getPendingApprovals', () => {
       demoSessionId: 'sess-abc',
     });
   });
+
+  it('refuses a demo admin with no workspace id (403) instead of an org-wide query', async () => {
+    const req = mockRequest({
+      user: {
+        id: 100,
+        role: Role.ADMIN,
+        assignedRoles: [Role.ADMIN],
+        email: 'demo.admin@demo.local',
+        display_name: 'Demo Admin',
+        demoMode: true,
+        // demoSessionId deliberately absent — demoScope() must throw 403 rather
+        // than let an unscoped org-wide pending query run for a demo caller.
+      },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number };
+    expect(err.statusCode).toBe(403);
+    expect(mockedExpenseModel.findAll).not.toHaveBeenCalled();
+  });
+
+  it('serves a demo MANAGER from the database and never calls Graph', async () => {
+    mockedExpenseModel.findPendingByManagerId.mockResolvedValue({ data: [mockExpense()], total: 1 });
+
+    const req = mockRequest({
+      user: {
+        id: 50,
+        role: Role.MANAGER,
+        assignedRoles: [Role.MANAGER],
+        email: 'demo.user@demo.local',
+        display_name: 'Demo User',
+        demoMode: true,
+        demoSessionId: 'sess-abc',
+      },
+      // A demo session carries a (demo) bearer token, but Graph must still be
+      // skipped in favor of the seeded team.
+      headers: { authorization: 'Bearer demo-token' },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    expect(mockedGraphApiService.getDirectReports).not.toHaveBeenCalled();
+    expect(mockedExpenseModel.findPendingByManagerId).toHaveBeenCalledWith(50, { page: 1, pageSize: 20 });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { source: 'database', reason: 'missing_token' } }),
+    );
+  });
 });
 
 describe('approvalController.approveExpense', () => {
