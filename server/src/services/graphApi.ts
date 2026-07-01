@@ -19,6 +19,11 @@ const MEMBER_OF_PATH = '/v1.0/me/memberOf';
 // the manager-chain expansion so every GraphUser carries the same shape.
 const ORG_USER_SELECT = 'id,displayName,mail,userPrincipalName,jobTitle,department,employeeId,officeLocation';
 
+// Extended $select for the single-user detail view (org-chart node modal): the
+// org fields plus the contact numbers Graph only returns when asked. Kept apart
+// from ORG_USER_SELECT so the list/reporting reads stay minimal.
+const USER_DETAIL_SELECT = `${ORG_USER_SELECT},mobilePhone,businessPhones`;
+
 // Per-request timeout (env-overridable for slow tenants).
 const GRAPH_TIMEOUT_MS = intFromEnv(process.env.GRAPH_TIMEOUT_MS, 10_000);
 
@@ -72,6 +77,13 @@ export interface GraphUser {
 export interface GraphGroup {
   id: string;
   displayName: string | null;
+}
+
+// A single user's fuller profile for the org-chart detail modal: the base
+// GraphUser plus the contact numbers requested via USER_DETAIL_SELECT.
+export interface GraphUserDetail extends GraphUser {
+  mobilePhone: string | null;
+  businessPhones: string[];
 }
 
 // /me?$expand=manager($levels=max) returns the manager nested recursively under
@@ -557,5 +569,81 @@ export const graphApiService = {
     return directReports.some(
       (report) => typeof report.id === 'string' && report.id.toLowerCase() === target,
     );
+  },
+
+  /**
+   * Read ANY directory user's profile by Entra object id via /users/{id}
+   * (requires the granted+consented User.Read.All app permission). Enriches an
+   * org-chart node the caller clicked. Cached 15 min keyed by the TARGET's id —
+   * the profile is caller-agnostic, so every viewer shares one cache entry.
+   */
+  async getUserById(
+    entraId: string,
+    userAccessToken: string,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<GraphUserDetail> {
+    const cacheKey = `userDetail:${entraId.toLowerCase()}`;
+    const cached = options.forceRefresh ? undefined : cacheService.get<GraphUserDetail>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    try {
+      const raw = await graphGet<GraphUserDetail>(
+        `/users/${encodeURIComponent(entraId)}`,
+        userAccessToken,
+        { $select: USER_DETAIL_SELECT },
+      );
+      const detail: GraphUserDetail = {
+        ...normalizeOrgUser(raw),
+        mobilePhone: raw.mobilePhone ?? null,
+        businessPhones: Array.isArray(raw.businessPhones) ? raw.businessPhones : [],
+      };
+      cacheService.set(cacheKey, detail);
+      return detail;
+    } catch (err) {
+      logger.error('Failed to fetch user profile from Graph API', {
+        err: summarizeHttpError(err),
+        entraId,
+      });
+      throw err;
+    }
+  },
+
+  /**
+   * Read ANY directory user's group memberships by Entra object id via
+   * /users/{id}/memberOf (requires the granted+consented GroupMember.Read.All).
+   * Paginated + cached 15 min keyed by the target's id.
+   */
+  async getUserGroups(
+    entraId: string,
+    userAccessToken: string,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<GraphGroup[]> {
+    const cacheKey = `userGroups:${entraId.toLowerCase()}`;
+    const cached = options.forceRefresh ? undefined : cacheService.get<GraphGroup[]>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    try {
+      const encoded = encodeURIComponent(entraId);
+      const groups = await paginateGraphCollection<GraphGroup>({
+        initialUrl: `${GRAPH_BASE_URL}/users/${encoded}/memberOf/microsoft.graph.group?$select=id,displayName`,
+        userAccessToken,
+        allowedPathPrefix: `/v1.0/users/${encoded}/memberOf`,
+        pageCap: MAX_GROUP_PAGES,
+        resourceName: 'user group memberships',
+      });
+      const normalized = groups.map((group) => ({ id: group.id, displayName: group.displayName ?? null }));
+      cacheService.set(cacheKey, normalized);
+      return normalized;
+    } catch (err) {
+      logger.error('Failed to fetch user group memberships from Graph API', {
+        err: summarizeHttpError(err),
+        entraId,
+      });
+      throw err;
+    }
   },
 };

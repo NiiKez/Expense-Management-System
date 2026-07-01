@@ -59,11 +59,11 @@ afterEach(() => {
 });
 
 describe('createDemoWorkspace', () => {
-  it('seeds an admin, manager, two reports and their expenses inside one transaction', async () => {
+  it('seeds a multi-level demo org and its expenses inside one transaction', async () => {
     const conn = fakeConnection();
     let nextId = 0;
     // Hand out incrementing insertIds so we can verify the per-role mapping:
-    // admin(1), manager(2), emp1/Jordan(3), emp2/Sam(4), then expenses.
+    // admin(1), manager/Demo User(2), emp1/Jordan(3), then the rest of the org.
     conn.execute.mockImplementation(() => Promise.resolve([{ insertId: ++nextId }]));
     mockedPool.getConnection.mockResolvedValue(conn);
 
@@ -82,17 +82,27 @@ describe('createDemoWorkspace', () => {
     expect(conn.rollback).not.toHaveBeenCalled();
     expect(conn.release).toHaveBeenCalledTimes(1);
 
-    // 4 demo users + 7 seeded expenses (each with at least a SUBMITTED audit row,
+    // 9 demo users + 7 seeded expenses (each with at least a SUBMITTED audit row,
     // plus an extra row for the approved/rejected ones).
     const userInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO users/.test(c[0]));
     const expenseInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO expenses/.test(c[0]));
-    expect(userInserts).toHaveLength(4);
+    expect(userInserts).toHaveLength(9);
     expect(expenseInserts).toHaveLength(7);
 
-    // The four users cover ADMIN, MANAGER, EMPLOYEE, EMPLOYEE (role is the 4th
-    // bound param of the users INSERT).
+    // The nine users span the Engineering and Sales branches in insert order (role
+    // is the 4th bound param of the users INSERT).
     const roles = userInserts.map((c) => c[1][3]);
-    expect(roles).toEqual([Role.ADMIN, Role.MANAGER, Role.EMPLOYEE, Role.EMPLOYEE]);
+    expect(roles).toEqual([
+      Role.ADMIN, // Demo Admin
+      Role.MANAGER, // Demo User (Engineering)
+      Role.EMPLOYEE, // Jordan Lee
+      Role.EMPLOYEE, // Sam Carter
+      Role.MANAGER, // Ravi Shah (Engineering Lead)
+      Role.EMPLOYEE, // Ana Torres
+      Role.MANAGER, // Priya Nair (Sales)
+      Role.EMPLOYEE, // Diego Alvarez
+      Role.EMPLOYEE, // Mei Lin
+    ]);
 
     // All four share one demo_session_id (the last bound param) and are flagged
     // is_demo (TRUE is baked into the INSERT SQL).
@@ -119,11 +129,12 @@ describe('createDemoWorkspace', () => {
     expect(workspace.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 600 * 1000);
     expect(workspace.expiresAt.getTime()).toBeLessThanOrEqual(after + 600 * 1000);
 
-    // The DATE_ADD ttl bind param (6th, index 5) on each users INSERT is the same
-    // configured TTL, so the row-level demo_expires_at tracks the token lifetime.
+    // The DATE_ADD ttl bind param (index 9, after job_title + department +
+    // office_location + employee_id) on each users INSERT is the same configured
+    // TTL, so the row-level demo_expires_at tracks the token lifetime.
     const userInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO users/.test(c[0]));
-    expect(userInserts).toHaveLength(4);
-    expect(userInserts.every((c) => c[1][5] === 600)).toBe(true);
+    expect(userInserts).toHaveLength(9);
+    expect(userInserts.every((c) => c[1][9] === 600)).toBe(true);
   });
 
   it('rolls back and rethrows when seeding fails', async () => {

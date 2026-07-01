@@ -17,6 +17,14 @@ process.env.VITE_ENTRA_CLIENT_ID = 'test-client-id';
 process.env.VITE_ENTRA_TENANT_ID = 'test-tenant-id';
 process.env.VITE_REDIRECT_URI = 'http://localhost:5173';
 
+// jsdom's environment doesn't expose structuredClone (a browser/Node global).
+// dagre — used by the org-chart layout — calls it, so polyfill with a structural
+// JSON clone, which is sufficient for the plain-data graph labels dagre clones.
+if (typeof globalThis.structuredClone === 'undefined') {
+  globalThis.structuredClone = (<T>(value: T): T =>
+    JSON.parse(JSON.stringify(value))) as typeof structuredClone;
+}
+
 // jsdom does not implement window.matchMedia — mock it so components that
 // call matchMedia (e.g. responsive hooks, MUI) don't throw.
 Object.defineProperty(window, 'matchMedia', {
