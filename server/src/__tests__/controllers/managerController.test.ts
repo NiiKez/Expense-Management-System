@@ -360,6 +360,72 @@ describe('managerController', () => {
     });
   });
 
+  it('sets appUser to null for a Graph report with no matching app-user row', async () => {
+    mockedGraphApiService.getDirectReports.mockResolvedValue([
+      {
+        id: 'entra-a',
+        displayName: 'Report A',
+        mail: 'a@test.com',
+        userPrincipalName: 'a@test.com',
+        jobTitle: null,
+        department: null,
+        employeeId: null,
+        officeLocation: null,
+      },
+      {
+        id: 'entra-b',
+        displayName: 'Report B',
+        mail: 'b@test.com',
+        userPrincipalName: 'b@test.com',
+        jobTitle: null,
+        department: null,
+        employeeId: null,
+        officeLocation: null,
+      },
+    ]);
+    // Only entra-a is provisioned as an app user; entra-b has no matching row.
+    mockedUserModel.findByEntraIds.mockResolvedValue([
+      {
+        id: 7,
+        entra_id: 'entra-a',
+        email: 'a@test.com',
+        display_name: 'Report A',
+        role: Role.EMPLOYEE,
+        manager_id: null,
+        is_active: true,
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    ]);
+    mockedUserModel.reassignManagerForUsers.mockResolvedValue(undefined);
+    mockedUserModel.syncOrgAttributesForUsers.mockResolvedValue(undefined);
+
+    const req = mockRequest({ headers: { authorization: 'Bearer token-123' } });
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    const data = (res.json as jest.Mock).mock.calls[0][0].data;
+    expect(data).toHaveLength(2);
+    expect(data[0]).toEqual(expect.objectContaining({ id: 'entra-a', appUser: expect.objectContaining({ id: 7 }) }));
+    expect(data[1]).toEqual(expect.objectContaining({ id: 'entra-b', appUser: null }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('forwards an outer error to next when the database fallback query throws', async () => {
+    const dbError = new Error('user directory unavailable');
+    mockedUserModel.findByManagerId.mockRejectedValue(dbError);
+
+    // No bearer token → DB fallback path, whose rejection reaches the outer catch.
+    const req = mockRequest();
+    const res = mockResponse();
+
+    await getManagerEmployees(req as Request, res as Response, next);
+
+    expect(next).toHaveBeenCalledWith(dbError);
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
   it('forwards forceRefresh=true to Graph and echoes it in the response meta', async () => {
     mockedGraphApiService.getDirectReports.mockResolvedValue([]);
     mockedUserModel.findByManagerId.mockResolvedValue([]);

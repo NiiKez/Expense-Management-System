@@ -103,6 +103,29 @@ describe('createDemoWorkspace', () => {
     expect(mockedLogger.info).toHaveBeenCalledWith('Created demo workspace', expect.any(Object));
   });
 
+  it('stamps expiresAt at now + configured TTL and binds that TTL on every user INSERT', async () => {
+    // TZ is pinned UTC (jest.config), so Date math is host-independent.
+    process.env.DEMO_SESSION_TTL_SECONDS = '600';
+    const conn = fakeConnection();
+    let nextId = 0;
+    conn.execute.mockImplementation(() => Promise.resolve([{ insertId: ++nextId }]));
+    mockedPool.getConnection.mockResolvedValue(conn);
+
+    const before = Date.now();
+    const workspace = await createDemoWorkspace();
+    const after = Date.now();
+
+    // expiresAt ≈ Date.now() + ttl*1000, taken at some instant during the call.
+    expect(workspace.expiresAt.getTime()).toBeGreaterThanOrEqual(before + 600 * 1000);
+    expect(workspace.expiresAt.getTime()).toBeLessThanOrEqual(after + 600 * 1000);
+
+    // The DATE_ADD ttl bind param (6th, index 5) on each users INSERT is the same
+    // configured TTL, so the row-level demo_expires_at tracks the token lifetime.
+    const userInserts = conn.execute.mock.calls.filter((c) => /INSERT INTO users/.test(c[0]));
+    expect(userInserts).toHaveLength(4);
+    expect(userInserts.every((c) => c[1][5] === 600)).toBe(true);
+  });
+
   it('rolls back and rethrows when seeding fails', async () => {
     const conn = fakeConnection();
     conn.execute.mockRejectedValueOnce(new Error('insert failed'));
@@ -151,6 +174,33 @@ describe('signDemoToken', () => {
       { sub: '42', demo: true, role: Role.MANAGER },
       'unit-demo-secret',
       expect.objectContaining({ algorithm: 'HS256' }),
+    );
+  });
+
+  it('forwards the default demo TTL as expiresIn (the session lifecycle boundary)', () => {
+    // With no override, the token must expire at the configured default (2h). A
+    // dropped expiresIn would mint an eternal demo token and fail this.
+    mockedJwt.sign.mockReturnValue('signed.demo.jwt' as never);
+
+    signDemoToken(42, Role.MANAGER);
+
+    expect(mockedJwt.sign).toHaveBeenCalledWith(
+      expect.anything(),
+      'unit-demo-secret',
+      expect.objectContaining({ algorithm: 'HS256', expiresIn: 2 * 60 * 60 }),
+    );
+  });
+
+  it('forwards the CONFIGURED DEMO_SESSION_TTL_SECONDS as expiresIn (not hardcoded)', () => {
+    process.env.DEMO_SESSION_TTL_SECONDS = '900';
+    mockedJwt.sign.mockReturnValue('signed.demo.jwt' as never);
+
+    signDemoToken(42, Role.EMPLOYEE);
+
+    expect(mockedJwt.sign).toHaveBeenCalledWith(
+      expect.anything(),
+      'unit-demo-secret',
+      expect.objectContaining({ expiresIn: 900 }),
     );
   });
 

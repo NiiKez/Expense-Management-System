@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { expenseModel } from '../../models/expense';
 import { auditLogModel } from '../../models/auditLog';
 import { createExpense, getExpenses, getExpenseById, updateExpense, deleteExpense, resubmitExpense, exportMyExpenses } from '../../controllers/expenseController';
-import { Status, AuditAction, Category, Role, Expense, AuditLog } from '../../types';
+import { Status, AuditAction, Category, Role, Expense, AuditLog, Receipt } from '../../types';
 import { AppError } from '../../utils/errors';
 
 // ── Mock models ────────────────────────────────────────────────
@@ -12,16 +12,27 @@ jest.mock('../../models/auditLog');
 jest.mock('../../models/receipt');
 jest.mock('../../models/user');
 jest.mock('../../services/graphApi');
+jest.mock('../../services/notificationService');
+// Partial-mock: keep the real path/sanitizer helpers but stub safeUnlinkReceipt
+// so receipt-file cleanup can be asserted without touching the disk.
+jest.mock('../../utils/receiptFiles', () => {
+  const actual = jest.requireActual('../../utils/receiptFiles');
+  return { __esModule: true, ...actual, safeUnlinkReceipt: jest.fn().mockResolvedValue(undefined) };
+});
 
 import { receiptModel } from '../../models/receipt';
 import { userModel } from '../../models/user';
 import { graphApiService } from '../../services/graphApi';
+import { notificationService } from '../../services/notificationService';
+import { safeUnlinkReceipt } from '../../utils/receiptFiles';
 
 const mockedExpenseModel = expenseModel as jest.Mocked<typeof expenseModel>;
 const mockedAuditLogModel = auditLogModel as jest.Mocked<typeof auditLogModel>;
 const mockedReceiptModel = receiptModel as jest.Mocked<typeof receiptModel>;
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
 const mockedGraphApiService = graphApiService as jest.Mocked<typeof graphApiService>;
+const mockedNotificationService = notificationService as jest.Mocked<typeof notificationService>;
+const mockedSafeUnlinkReceipt = safeUnlinkReceipt as jest.MockedFunction<typeof safeUnlinkReceipt>;
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -62,6 +73,17 @@ const mockAuditLog = (overrides: Partial<AuditLog> = {}): AuditLog => ({
   details: null,
   ip_address: null,
   created_at: new Date(),
+  ...overrides,
+});
+
+const mockReceipt = (overrides: Partial<Receipt> = {}): Receipt => ({
+  id: 5,
+  expense_id: 10,
+  file_name: 'invoice.pdf',
+  file_path: '/srv/uploads/stored-receipt.pdf',
+  mime_type: 'application/pdf',
+  file_size: 2048,
+  uploaded_at: new Date(),
   ...overrides,
 });
 
@@ -178,6 +200,25 @@ describe('expenseController', () => {
       expect(next).toHaveBeenCalledWith(dbError);
       expect(res.status).not.toHaveBeenCalled();
     });
+
+    it('should notify the submitter\'s manager for approval (resubmit:false)', async () => {
+      const expense = mockExpense();
+      mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt: null });
+
+      const req = mockRequest({ body: validBody });
+      const res = mockResponse();
+
+      await createExpense(req as Request, res as Response, next);
+
+      // The notification side-effect is now mocked (not the real service running
+      // against mocked models) and its exact args are asserted.
+      expect(mockedNotificationService.expenseForApproval).toHaveBeenCalledWith({
+        submitterId: 1,
+        actor: req.user,
+        expense,
+        resubmit: false,
+      });
+    });
   });
 
   // ────────────────────────────────────────────────────────────
@@ -226,6 +267,39 @@ describe('expenseController', () => {
           pagination: { total: 0, page: 2, pageSize: 10 },
         }),
       );
+    });
+
+    it('should forward concrete category/search/date/sort/order filters to the model', async () => {
+      mockedExpenseModel.findByUserId.mockResolvedValue({ data: [], total: 0 });
+
+      const req = mockRequest({
+        query: {
+          category: Category.TRAVEL,
+          search: 'flight',
+          date_from: '2026-01-01',
+          date_to: '2026-02-01',
+          sort: 'amount',
+          order: 'desc',
+        },
+      });
+      const res = mockResponse();
+
+      await getExpenses(req as Request, res as Response, next);
+
+      // Concrete (non-undefined) values prove each filter survives the passthrough;
+      // toHaveBeenCalledWith would silently ignore a dropped filter left undefined.
+      expect(mockedExpenseModel.findByUserId).toHaveBeenCalledWith(1, {
+        status: undefined,
+        category: Category.TRAVEL,
+        search: 'flight',
+        date_from: '2026-01-01',
+        date_to: '2026-02-01',
+        sort: 'amount',
+        order: 'desc',
+        page: 1,
+        pageSize: 20,
+      });
+      expect(next).not.toHaveBeenCalled();
     });
 
     it('should call next(err) when model throws', async () => {
@@ -447,6 +521,22 @@ describe('expenseController', () => {
       });
     });
 
+    it('should skip the audit row when the update applied no fields (no-op)', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.PENDING, version: 1 });
+      const updated = mockExpense({ ...expense, version: 2 });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.update.mockResolvedValue({ expense: updated, appliedFields: [] });
+
+      const req = mockRequest({ params: { id: '10' }, body: {} });
+      const res = mockResponse();
+
+      await updateExpense(req as Request, res as Response, next);
+
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: updated });
+      expect(mockedAuditLogModel.create).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+    });
+
     it('should return 400 for a non-numeric ID', async () => {
       const req = mockRequest({ params: { id: 'xyz' }, body: updateBody });
       const res = mockResponse();
@@ -544,6 +634,49 @@ describe('expenseController', () => {
 
       expect(mockedExpenseModel.delete).toHaveBeenCalledWith(10, 1, expense.version, '127.0.0.1');
       expect(res.json).toHaveBeenCalledWith({ success: true, message: 'Expense deleted' });
+    });
+
+    it('should unlink every stored receipt file after a successful delete', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.PENDING, version: 4 });
+      const receipts = [
+        mockReceipt({ id: 1, file_path: '/srv/uploads/r1.pdf' }),
+        mockReceipt({ id: 2, file_path: '/srv/uploads/r2.pdf' }),
+      ];
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      // Explicit setup — the happy-path test above only works off a leaked
+      // findByExpenseId implementation (clearAllMocks keeps implementations); this
+      // pins the two-receipt cleanup case so it never depends on test ordering.
+      mockedReceiptModel.findByExpenseId.mockResolvedValue(receipts);
+      mockedExpenseModel.delete.mockResolvedValue('SUCCESS');
+
+      const req = mockRequest({ params: { id: '10' } });
+      const res = mockResponse();
+
+      await deleteExpense(req as Request, res as Response, next);
+
+      expect(mockedExpenseModel.delete).toHaveBeenCalledWith(10, 1, 4, '127.0.0.1');
+      expect(mockedSafeUnlinkReceipt).toHaveBeenCalledTimes(2);
+      expect(mockedSafeUnlinkReceipt).toHaveBeenCalledWith('/srv/uploads/r1.pdf');
+      expect(mockedSafeUnlinkReceipt).toHaveBeenCalledWith('/srv/uploads/r2.pdf');
+      expect(res.json).toHaveBeenCalledWith({ success: true, message: 'Expense deleted' });
+    });
+
+    it('should return 404 when the row vanished between read and delete (NOT_FOUND)', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.PENDING, version: 1 });
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedReceiptModel.findByExpenseId.mockResolvedValue([]);
+      mockedExpenseModel.delete.mockResolvedValue('NOT_FOUND');
+
+      const req = mockRequest({ params: { id: '10' } });
+      const res = mockResponse();
+
+      await deleteExpense(req as Request, res as Response, next);
+
+      const error = next.mock.calls[0][0] as unknown as AppError;
+      expect(error.statusCode).toBe(404);
+      expect(error.message).toBe('Expense not found');
+      expect(mockedSafeUnlinkReceipt).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
     });
 
     it('should return 400 for a non-numeric ID', async () => {
@@ -654,6 +787,32 @@ describe('expenseController', () => {
       expect(mockedExpenseModel.resubmit).toHaveBeenCalledWith(10, resubmitBody, 3);
       expect(res.json).toHaveBeenCalledWith({ success: true, data: updatedExpense });
       expect(next).not.toHaveBeenCalled();
+    });
+
+    it('should notify the manager with resubmit:true after a successful resubmit', async () => {
+      const expense = mockExpense({ submitted_by: 1, status: Status.REJECTED, version: 3 });
+      const updatedExpense = mockExpense({ id: 10, status: Status.PENDING, version: 4, title: 'Corrected title' });
+
+      mockedExpenseModel.findById.mockResolvedValue(expense);
+      mockedExpenseModel.resubmit.mockResolvedValue({
+        result: 'SUCCESS',
+        expense: updatedExpense,
+        appliedFields: ['title'],
+      });
+      mockedAuditLogModel.create.mockResolvedValue(mockAuditLog({ action: AuditAction.RESUBMITTED }));
+
+      const req = mockRequest({ params: { id: '10' }, body: resubmitBody });
+      const res = mockResponse();
+
+      await resubmitExpense(req as Request, res as Response, next);
+
+      // The manager notification carries the UPDATED expense and resubmit:true.
+      expect(mockedNotificationService.expenseForApproval).toHaveBeenCalledWith({
+        submitterId: 1,
+        actor: req.user,
+        expense: updatedExpense,
+        resubmit: true,
+      });
     });
 
     it('should record a RESUBMITTED audit entry with the REJECTED→PENDING transition', async () => {

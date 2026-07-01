@@ -1,5 +1,12 @@
 import type { Config } from 'jest';
 
+// Pin the timezone before workers fork so any Date-based assertion is deterministic
+// across machines/CI. This matters most for the demo-session lifecycle: expiry
+// compares the Node process clock (Date.now) against the MySQL-stored
+// `demo_expires_at`, so a host TZ other than UTC could skew the boundary. Mirrors
+// the same pin in jest.config.ts (unit runner).
+process.env.TZ = 'UTC';
+
 // Integration tests exercise the full HTTP stack against a live MySQL instance.
 // They run ONLY in the Docker test stack (docker/docker-compose.test.yml) or via
 // `npm run test:integration` with DB_* env vars pointed at a disposable database.

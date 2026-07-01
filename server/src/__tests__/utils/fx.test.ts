@@ -151,6 +151,28 @@ describe('convertToBase', () => {
     // Math.round(-986.79) = -987 -> -9.87
     expect(convertToBase(-7.77, 'GBP')).toBe(-9.87);
   });
+
+  // ── Negative half-cent rounding is SYMMETRIC with the positive case ──
+  // Rounding is half-away-from-zero on the magnitude, so a negative half-cent
+  // mirrors its positive counterpart (-1.005 -> -1.01, matching +1.005 -> 1.01)
+  // rather than rounding toward zero. This is the behavior refunds/adjustments
+  // need and matches MySQL ROUND() used by the aggregate SQL path.
+  it('rounds negative half-cents away from zero, mirroring the positive case', () => {
+    expect(convertToBase(1.005, 'USD')).toBe(1.01);
+    expect(convertToBase(-1.005, 'USD')).toBe(-1.01);
+    // Same magnitude-independent behavior at a larger half-cent value.
+    expect(convertToBase(2.005, 'USD')).toBe(2.01);
+    expect(convertToBase(-2.005, 'USD')).toBe(-2.01);
+  });
+
+  it('produces equal magnitudes for +/- half-cent (symmetry)', () => {
+    expect(Math.abs(convertToBase(1.005, 'USD'))).toBe(Math.abs(convertToBase(-1.005, 'USD')));
+    expect(Math.abs(convertToBase(2.005, 'USD'))).toBe(Math.abs(convertToBase(-2.005, 'USD')));
+  });
+
+  it('never returns negative zero for tiny negative amounts', () => {
+    expect(Object.is(convertToBase(-0.001, 'USD'), 0)).toBe(true);
+  });
 });
 
 // ── amountInBaseSql ──────────────────────────────────────────────

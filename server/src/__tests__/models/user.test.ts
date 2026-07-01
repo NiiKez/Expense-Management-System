@@ -1,5 +1,6 @@
 import pool from '../../config/db';
 import { userModel } from '../../models/user';
+import { Role } from '../../types';
 
 jest.mock('../../config/db', () => ({
   __esModule: true,
@@ -168,5 +169,130 @@ describe('userModel.getUserGroups', () => {
     expect(sql).toBe('SELECT group_id, group_name FROM user_groups WHERE user_id = ? ORDER BY group_name ASC');
     expect(params).toEqual([7]);
     expect(result).toBe(rows);
+  });
+});
+
+describe('userModel.findById / findByEntraId / findByManagerId param binding', () => {
+  it('findById binds the numeric id and returns the row', async () => {
+    const row = { id: 7 };
+    mockedPool.execute.mockResolvedValue([[row]]);
+
+    const result = await userModel.findById(7);
+
+    const [sql, params] = mockedPool.execute.mock.calls[0];
+    expect(sql).toBe('SELECT * FROM users WHERE id = ?');
+    expect(params).toEqual([7]);
+    expect(result).toBe(row);
+  });
+
+  it('findById returns null when no row matches', async () => {
+    mockedPool.execute.mockResolvedValue([[]]);
+    expect(await userModel.findById(404)).toBeNull();
+  });
+
+  it('findByEntraId binds the oid string', async () => {
+    const row = { id: 7, entra_id: 'oid-123' };
+    mockedPool.execute.mockResolvedValue([[row]]);
+
+    const result = await userModel.findByEntraId('oid-123');
+
+    const [sql, params] = mockedPool.execute.mock.calls[0];
+    expect(sql).toBe('SELECT * FROM users WHERE entra_id = ?');
+    expect(params).toEqual(['oid-123']);
+    expect(result).toBe(row);
+  });
+
+  it('findByManagerId binds the manager id and orders by name', async () => {
+    const rows = [{ id: 1 }, { id: 2 }];
+    mockedPool.execute.mockResolvedValue([rows]);
+
+    const result = await userModel.findByManagerId(9);
+
+    const [sql, params] = mockedPool.execute.mock.calls[0];
+    expect(sql).toBe('SELECT * FROM users WHERE manager_id = ? ORDER BY display_name ASC');
+    expect(params).toEqual([9]);
+    expect(result).toBe(rows);
+  });
+});
+
+describe('userModel.upsertByEntraId', () => {
+  it('emits INSERT ... ON DUPLICATE KEY UPDATE with the right params then re-reads by entra_id', async () => {
+    const row = { id: 7, entra_id: 'oid-123', email: 'a@b.com', display_name: 'Alice', role: Role.MANAGER };
+    mockedPool.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }]) // upsert
+      .mockResolvedValueOnce([[row]]); // findByEntraId re-read
+
+    const result = await userModel.upsertByEntraId({
+      entra_id: 'oid-123',
+      email: 'a@b.com',
+      display_name: 'Alice',
+      role: Role.MANAGER,
+    });
+
+    // Upsert statement.
+    const [insertSql, insertParams] = mockedPool.execute.mock.calls[0];
+    expect(insertSql).toContain('INSERT INTO users (entra_id, email, display_name, role)');
+    expect(insertSql).toContain('ON DUPLICATE KEY UPDATE');
+    expect(insertSql).toContain('email = VALUES(email)');
+    expect(insertSql).toContain('display_name = VALUES(display_name)');
+    // Role is not overwritten on a conflict — the token is the source of truth on
+    // insert, but an existing row's role stays synced elsewhere.
+    expect(insertSql).not.toContain('role = VALUES(role)');
+    expect(insertParams).toEqual(['oid-123', 'a@b.com', 'Alice', Role.MANAGER]);
+
+    // Re-read is scoped by entra_id, not insertId (upsert may not insert).
+    const [readSql, readParams] = mockedPool.execute.mock.calls[1];
+    expect(readSql).toBe('SELECT * FROM users WHERE entra_id = ?');
+    expect(readParams).toEqual(['oid-123']);
+
+    expect(result).toBe(row);
+  });
+
+  it('throws if the row cannot be loaded back after the upsert', async () => {
+    mockedPool.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]); // re-read finds nothing
+
+    await expect(
+      userModel.upsertByEntraId({
+        entra_id: 'oid-x',
+        email: 'x@y.com',
+        display_name: 'X',
+        role: Role.EMPLOYEE,
+      }),
+    ).rejects.toThrow('Failed to load user after upsert (entra_id=oid-x)');
+  });
+});
+
+describe('userModel.updateRole (privilege-change write)', () => {
+  it("binds ['ADMIN', id] in that order and re-reads on success", async () => {
+    const row = { id: 7, role: Role.ADMIN };
+    mockedPool.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }]) // UPDATE
+      .mockResolvedValueOnce([[row]]); // findById re-read
+
+    const result = await userModel.updateRole(7, Role.ADMIN);
+
+    const [sql, params] = mockedPool.execute.mock.calls[0];
+    expect(sql).toBe('UPDATE users SET role = ? WHERE id = ?');
+    // Role first, id second — a swapped order would set role to the id.
+    expect(params).toEqual([Role.ADMIN, 7]);
+
+    // Re-read scoped to the same id.
+    const [readSql, readParams] = mockedPool.execute.mock.calls[1];
+    expect(readSql).toBe('SELECT * FROM users WHERE id = ?');
+    expect(readParams).toEqual([7]);
+
+    expect(result).toBe(row);
+  });
+
+  it('returns null (no re-read) when no row was updated', async () => {
+    mockedPool.execute.mockResolvedValueOnce([{ affectedRows: 0 }]); // UPDATE hits nothing
+
+    const result = await userModel.updateRole(404, Role.ADMIN);
+
+    expect(result).toBeNull();
+    // Only the UPDATE ran — the row lookup is skipped on affectedRows === 0.
+    expect(mockedPool.execute).toHaveBeenCalledTimes(1);
   });
 });

@@ -27,4 +27,17 @@ describe('updatePreferencesSchema', () => {
   it('rejects a non-boolean notification flag', () => {
     expect(() => updatePreferencesSchema.parse({ notify_on_decision: 'yes' })).toThrow();
   });
+
+  // Privilege escalation guard: .strict() must reject any field that isn't a known
+  // preference, so a user can't smuggle a role/admin change in through the
+  // preferences PATCH — even alongside an otherwise-valid preference field.
+  it('rejects a role field (no privilege escalation via preferences)', () => {
+    expect(() =>
+      updatePreferencesSchema.parse({ notify_on_comment: false, role: 'ADMIN' }),
+    ).toThrow();
+  });
+
+  it('rejects an is_admin field (no privilege escalation via preferences)', () => {
+    expect(() => updatePreferencesSchema.parse({ is_admin: true })).toThrow();
+  });
 });

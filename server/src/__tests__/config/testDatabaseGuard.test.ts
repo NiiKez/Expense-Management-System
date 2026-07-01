@@ -22,15 +22,33 @@ describe('integration-test disposable-database guard', () => {
   });
 
   describe('isDisposableTestDbName', () => {
-    it.each(['expense_management_test', 'test_db', 'TEST', 'ci_TEST_42', 'my_test_database'])(
-      'accepts %s (contains "test")',
+    it.each(['expense_management_test', 'test_db', 'TEST', 'ci_TEST_42', 'my_test_database', 'test'])(
+      'accepts %s (has a bounded "test" token)',
       (name) => {
         expect(isDisposableTestDbName(name)).toBe(true);
       },
     );
 
     it.each(['expense_management', 'production', 'expense_app', 'prod_db', ''])(
-      'rejects %s (no "test")',
+      'rejects %s (no "test" token)',
+      (name) => {
+        expect(isDisposableTestDbName(name)).toBe(false);
+      },
+    );
+
+    // The dangerous class for a DESTRUCTIVE guard: real words that merely embed
+    // the letters t-e-s-t. A naive /test/ substring would classify these as
+    // disposable and wipe them.
+    it.each(['latest', 'contest', 'greatest', 'attestation', 'protest', 'testify'])(
+      'rejects %s (letters "test" embedded in a larger word, not a token)',
+      (name) => {
+        expect(isDisposableTestDbName(name)).toBe(false);
+      },
+    );
+
+    // Fail closed on environment markers even when a "test" token is present.
+    it.each(['prod_test_snapshot', 'live_test', 'test_production_copy', 'staging_test', 'main_test'])(
+      'rejects %s (carries a real-environment token despite containing "test")',
       (name) => {
         expect(isDisposableTestDbName(name)).toBe(false);
       },

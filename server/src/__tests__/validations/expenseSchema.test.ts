@@ -29,7 +29,9 @@ function offsetYears(base: Date, years: number): Date {
 
 const TODAY = ymd(todayUtc());
 const YESTERDAY = ymd(offsetDays(todayUtc(), -1));
-const TOMORROW = ymd(offsetDays(todayUtc(), 2));
+// Real tomorrow (today + 1, UTC) — the tightest future edge. The `<= today` bound
+// must reject it. (Was previously today + 2, which left the exact edge unproven.)
+const TOMORROW = ymd(offsetDays(todayUtc(), 1));
 const TOO_OLD = ymd(offsetYears(todayUtc(), -6)); // > MAX_EXPENSE_DATE_PAST_YEARS (5)
 
 const validCreate = () => ({
@@ -100,6 +102,22 @@ describe('createExpenseSchema', () => {
     expect(createExpenseSchema.safeParse({ ...validCreate(), category: 'BRIBERY' }).success).toBe(false);
   });
 
+  // Free-text length boundaries: the exact inclusive max must pass, one over fails.
+  describe('title / description length boundaries', () => {
+    it('accepts a title of exactly 255 characters', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), title: 'x'.repeat(255) }).success).toBe(true);
+    });
+
+    it('accepts a description of exactly 5000 characters and rejects 5001', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), description: 'x'.repeat(5000) }).success).toBe(true);
+      expect(createExpenseSchema.safeParse({ ...validCreate(), description: 'x'.repeat(5001) }).success).toBe(false);
+    });
+
+    it('accepts a null description (nullable/optional)', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), description: null }).success).toBe(true);
+    });
+  });
+
   describe('amount', () => {
     it('rejects amounts at or below zero', () => {
       expect(createExpenseSchema.safeParse({ ...validCreate(), amount: 0 }).success).toBe(false);
@@ -124,6 +142,45 @@ describe('createExpenseSchema', () => {
       expect(result.success).toBe(true);
       if (result.success) expect(result.data.amount).toBe(10.5);
     });
+
+    // The z.preprocess wrapper exists because z.coerce.number runs JS Number(),
+    // and Number([5]) === 5 / Number(true) === 1 / Number(null) === 0 would let a
+    // non-numeric JSON body slip through as a valid amount. Reject them at the door.
+    it.each([
+      ['a single-element array (Number([5]) === 5)', [5]],
+      ['a boolean true (Number(true) === 1)', true],
+      ['a boolean false (Number(false) === 0)', false],
+      ['a plain object', {}],
+      ['null (Number(null) === 0)', null],
+    ])('rejects a non-string/number amount: %s', (_label, value) => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), amount: value }).success).toBe(false);
+    });
+
+    it("regression anchor: a numeric string like '10.50' still coerces to 10.5", () => {
+      const result = createExpenseSchema.safeParse({ ...validCreate(), amount: '10.50' });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.amount).toBe(10.5);
+    });
+
+    // Boundary-accepts: the exact inclusive edges of MIN/MAX must be accepted.
+    it('accepts the minimum amount 0.01 and the maximum 99999999.99', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), amount: 0.01 }).success).toBe(true);
+      expect(createExpenseSchema.safeParse({ ...validCreate(), amount: 99999999.99 }).success).toBe(true);
+    });
+  });
+
+  // .strict() must drop any client-supplied privileged/unknown field at create so
+  // it can never reach the model, even alongside otherwise-valid fields.
+  describe('privileged field rejection (.strict)', () => {
+    it('rejects a payload injecting status/submitted_by/id', () => {
+      const result = createExpenseSchema.safeParse({
+        ...validCreate(),
+        status: 'APPROVED',
+        submitted_by: 999,
+        id: 7,
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   describe('expense_date', () => {
@@ -133,6 +190,14 @@ describe('createExpenseSchema', () => {
     });
 
     it('rejects a future date', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), expense_date: TOMORROW }).success).toBe(false);
+    });
+
+    // Tightest future-edge: today (UTC) is the inclusive `<= today` boundary and
+    // must be accepted, while the very next day (today + 1) must be rejected. This
+    // pins the boundary against an off-by-one in the `<= todayUTC` comparison.
+    it('accepts exactly today (UTC) but rejects exactly tomorrow (today + 1)', () => {
+      expect(createExpenseSchema.safeParse({ ...validCreate(), expense_date: TODAY }).success).toBe(true);
       expect(createExpenseSchema.safeParse({ ...validCreate(), expense_date: TOMORROW }).success).toBe(false);
     });
 
@@ -227,6 +292,10 @@ describe('rejectExpenseSchema', () => {
   it('rejects a reason over the length limit', () => {
     expect(rejectExpenseSchema.safeParse({ reason: 'x'.repeat(501) }).success).toBe(false);
   });
+
+  it('accepts a reason of exactly 500 characters (inclusive max)', () => {
+    expect(rejectExpenseSchema.safeParse({ reason: 'x'.repeat(500) }).success).toBe(true);
+  });
 });
 
 describe('createCommentSchema', () => {
@@ -244,6 +313,10 @@ describe('createCommentSchema', () => {
 
   it('rejects a body over 2000 characters', () => {
     expect(createCommentSchema.safeParse({ body: 'x'.repeat(2001) }).success).toBe(false);
+  });
+
+  it('accepts a body of exactly 2000 characters (inclusive max)', () => {
+    expect(createCommentSchema.safeParse({ body: 'x'.repeat(2000) }).success).toBe(true);
   });
 
   it('does not treat HTML as special (stored as plain text; output encoding is the client\'s job)', () => {

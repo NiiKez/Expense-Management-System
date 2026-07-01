@@ -123,4 +123,74 @@ describe('securityEventModel.record', () => {
     expect((params[3] as string).length).toBe(36); // entra_oid
     expect((params[7] as string).length).toBe(255); // detail
   });
+
+  it('redacts a secret-shaped `detail` before persisting it (both sinks get the clean value)', async () => {
+    mockedPool.execute.mockResolvedValue([{ insertId: 5 }]);
+
+    // Fake JWT fixture: canonical jwt.io header/payload with an obviously-dummy
+    // signature (matches the .gitleaks.toml test-fixture allowlist).
+    const secret = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dumm-signature_secevt';
+    await securityEventModel.record({
+      event_type: SecurityEventType.AUTH_FAILURE,
+      outcome: SecurityOutcome.FAILURE,
+      detail: `bad token: Bearer ${secret}`,
+    });
+
+    // The persisted `detail` param (index 7) must NOT contain the raw token.
+    const [, params] = mockedPool.execute.mock.calls[0];
+    const persistedDetail = params[7] as string;
+    expect(persistedDetail).not.toContain(secret);
+    expect(persistedDetail).toContain('[REDACTED]');
+
+    // And the emitted alert line carries the same scrubbed value, not the raw one.
+    const [, line] = mockedLogger.warn.mock.calls[0] as [string, { detail: string }];
+    expect(line.detail).not.toContain(secret);
+    expect(line.detail).toContain('[REDACTED]');
+  });
+
+  it('redacts secret-keyed `metadata` before serializing it to the JSON column', async () => {
+    mockedPool.execute.mockResolvedValue([{ insertId: 6 }]);
+
+    await securityEventModel.record({
+      event_type: SecurityEventType.ACCESS_DENIED,
+      outcome: SecurityOutcome.FAILURE,
+      metadata: { password: 'hunter2', client_secret: 's3cr3t', reason: 'not-allowlisted' },
+    });
+
+    const [, params] = mockedPool.execute.mock.calls[0];
+    const persistedMetadata = params[8] as string;
+    // Secret-named keys are scrubbed; the benign field survives.
+    expect(persistedMetadata).not.toContain('hunter2');
+    expect(persistedMetadata).not.toContain('s3cr3t');
+    expect(persistedMetadata).toContain('[REDACTED]');
+    expect(persistedMetadata).toContain('not-allowlisted');
+    // Still valid JSON for the JSON column.
+    expect(JSON.parse(persistedMetadata)).toEqual({
+      password: '[REDACTED]',
+      client_secret: '[REDACTED]',
+      reason: 'not-allowlisted',
+    });
+  });
+
+  it('the inner try/catch keeps record() resolving even if the diagnostic warn itself throws', async () => {
+    // Benign outcome → step 1 logs at info (not warn), so the only warn call is the
+    // diagnostic in the catch block. Make BOTH the DB write and that warn throw.
+    mockedPool.execute.mockRejectedValue(new Error('db down'));
+    mockedLogger.warn.mockImplementationOnce(() => {
+      throw new Error('logging pipe broke');
+    });
+
+    await expect(
+      securityEventModel.record({
+        event_type: SecurityEventType.STUB_AUTH_USED,
+        outcome: SecurityOutcome.SUCCESS,
+      }),
+    ).resolves.toBeUndefined();
+
+    // The diagnostic warn was attempted (and threw), but was swallowed internally.
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      'Failed to persist security event',
+      expect.objectContaining({ event_type: SecurityEventType.STUB_AUTH_USED }),
+    );
+  });
 });

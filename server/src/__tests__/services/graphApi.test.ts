@@ -512,6 +512,75 @@ describe('transient-failure retry', () => {
 
     expect((err as { response?: { status?: number } }).response?.status).toBe(401);
   });
+
+  it('retries a no-response network error on the Graph GET then succeeds', async () => {
+    // A broken connection with no HTTP response is the isRetryableError "no
+    // response = network/timeout" branch (ECONNRESET/ETIMEDOUT/ECONNABORTED). Pin a
+    // tiny per-request timeout so the errored/hung socket rejects fast as a
+    // no-response error the retry loop must recover from (a real ECONNRESET via
+    // nock hangs axios until its default timeout).
+    process.env.GRAPH_TIMEOUT_MS = '80';
+    try {
+      const { graphApiService } = await loadGraphApi();
+
+      mockTokenExchange(200, { access_token: 'graph-token' });
+      nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).replyWithError({ code: 'ECONNRESET', message: 'socket hang up' });
+      nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+      const reports = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+      expect(reports.map((r) => r.id)).toEqual(['entra-1']);
+      expect(nock.isDone()).toBe(true);
+    } finally {
+      delete process.env.GRAPH_TIMEOUT_MS;
+    }
+  });
+
+  it('honors a Retry-After HTTP-date on a 429 then succeeds', async () => {
+    const { graphApiService } = await loadGraphApi();
+
+    // A fixed past HTTP-date exercises parseRetryAfterMs's Date.parse branch; the
+    // resulting (clamped) delay is ~0 so the retry lands immediately.
+    nock(LOGIN_HOST).post(TOKEN_PATH).reply(429, {}, { 'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT' });
+    nock(LOGIN_HOST).post(TOKEN_PATH).reply(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(DIRECT_REPORTS_PATH).query(true).reply(200, { value: [graphUser('entra-1')] });
+
+    const reports = await graphApiService.getDirectReports(42, 'user-token', { forceRefresh: true });
+    expect(reports.map((r) => r.id)).toEqual(['entra-1']);
+    expect(nock.isDone()).toBe(true);
+  });
+});
+
+describe('non-retryable 5xx rethrow paths (not misclassified as auth errors)', () => {
+  it('rethrows a 500 from getMyOrgProfile without classifying it as a GraphApiAuthError', async () => {
+    const mod = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    // 500 is NOT in the retryable set (429/502/503/504), so it surfaces immediately.
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(500, { error: 'server_error' });
+
+    const err = await captureRejection(
+      mod.graphApiService.getMyOrgProfile(7, 'user-token', { forceRefresh: true }),
+    );
+
+    expect((err as { isAxiosError?: boolean }).isAxiosError).toBe(true);
+    expect((err as { response?: { status?: number } }).response?.status).toBe(500);
+    expect(mod.isGraphApiAuthError(err)).toBe(false);
+  });
+
+  it('rethrows a 500 from getManagerChain without classifying it as a GraphApiAuthError', async () => {
+    const mod = await loadGraphApi();
+
+    mockTokenExchange(200, { access_token: 'graph-token' });
+    nock(GRAPH_HOST).get(ME_PATH).query(true).reply(500, { error: 'server_error' });
+
+    const err = await captureRejection(
+      mod.graphApiService.getManagerChain(7, 'user-token', { forceRefresh: true }),
+    );
+
+    expect((err as { isAxiosError?: boolean }).isAxiosError).toBe(true);
+    expect((err as { response?: { status?: number } }).response?.status).toBe(500);
+    expect(mod.isGraphApiAuthError(err)).toBe(false);
+  });
 });
 
 describe('getGraphTokenOBO input validation', () => {

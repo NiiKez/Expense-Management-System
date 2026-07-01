@@ -19,6 +19,11 @@ const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
 const mockedGraphApiService = graphApiService as jest.Mocked<typeof graphApiService>;
 const mockedIsGraphApiAuthError = isGraphApiAuthError as jest.MockedFunction<typeof isGraphApiAuthError>;
 
+// The REAL type guard (bypassing the auto-mock) so at least one consent test
+// exercises the actual classification logic rather than a forced return value.
+const { isGraphApiAuthError: realIsGraphApiAuthError } =
+  jest.requireActual('../../services/graphApi') as typeof import('../../services/graphApi');
+
 // The signed-in manager (req.user) has DB id 2; the submitter has DB id 7.
 const MANAGER_ID = 2;
 const SUBMITTER_ID = 7;
@@ -173,6 +178,20 @@ describe('managerAuthorization', () => {
         const result = await verifyManagerRelationship(req, SUBMITTER_ID);
 
         expect(result).toEqual({ allowed: true });
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('DENIES a demo MANAGER for a submitter in a DIFFERENT demo workspace', async () => {
+        // Cross-workspace fence applies to demo MANAGERs too, not just ADMINs.
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-2', manager_id: MANAGER_ID }),
+        );
+        const req = mockRequest({ user: demoManager('sess-1') });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID);
+
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe('This expense is outside your demo workspace.');
         expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
       });
 
@@ -339,6 +358,32 @@ describe('managerAuthorization', () => {
           allowCachedFallback: true,
         });
 
+        expect(result.allowed).toBe(false);
+        expect(result.reason).toBe(
+          'Microsoft Graph consent is required and no local manager assignment is cached for this employee.',
+        );
+      });
+
+      it('classifies a real GraphApiAuthError shape via the ACTUAL type guard (regression-proof)', async () => {
+        // Unlike the test above, this does NOT force isGraphApiAuthError to true.
+        // It runs the REAL guard against a properly-shaped GraphApiAuthError, so a
+        // classification regression (checking the wrong field, dropping `reason`)
+        // would flip the result to the generic retry message and fail here.
+        mockedUserModel.findById.mockResolvedValue(mockSubmitter({ manager_id: 999 }));
+        mockedIsGraphApiAuthError.mockImplementation(realIsGraphApiAuthError);
+        const consentErr = Object.assign(new Error('consent required'), {
+          name: 'GraphApiAuthError',
+          reason: 'consent_required' as const,
+        });
+        mockedGraphApiService.isManagerOf.mockRejectedValue(consentErr);
+        const req = mockRequest({ headers: { authorization: 'Bearer token-123' } });
+
+        const result = await verifyManagerRelationship(req, SUBMITTER_ID, {
+          allowCachedFallback: true,
+        });
+
+        // The real guard actually returned true for this shape (not stubbed).
+        expect(mockedIsGraphApiAuthError).toHaveReturnedWith(true);
         expect(result.allowed).toBe(false);
         expect(result.reason).toBe(
           'Microsoft Graph consent is required and no local manager assignment is cached for this employee.',
@@ -546,6 +591,65 @@ describe('managerAuthorization', () => {
 
       await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).rejects.toMatchObject({
         statusCode: 403,
+      });
+    });
+
+    // Drive the read-gate directly through its demo branch: a demo caller may only
+    // ever read an expense whose submitter belongs to the SAME demo session.
+    describe('demo workspace boundary (read-gate)', () => {
+      const demoManagerUser = (sessionId: string) => ({
+        id: MANAGER_ID,
+        role: Role.MANAGER,
+        assignedRoles: [Role.MANAGER],
+        email: 'demo.user@demo.local',
+        display_name: 'Demo User',
+        demoMode: true,
+        demoSessionId: sessionId,
+      });
+      const demoAdminUser = (sessionId: string) => ({
+        id: MANAGER_ID,
+        role: Role.ADMIN,
+        assignedRoles: [Role.ADMIN],
+        email: 'demo.admin@demo.local',
+        display_name: 'Demo Admin',
+        demoMode: true,
+        demoSessionId: sessionId,
+      });
+
+      it('403s a demo MANAGER reading an expense from a DIFFERENT demo workspace', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-2', manager_id: MANAGER_ID }),
+        );
+        const req = mockRequest({ user: demoManagerUser('sess-1') });
+
+        await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).rejects.toMatchObject({
+          statusCode: 403,
+          message: expect.stringContaining('outside your demo workspace'),
+        });
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('403s a demo ADMIN reading an expense from a DIFFERENT demo workspace', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-2' }),
+        );
+        const req = mockRequest({ user: demoAdminUser('sess-1') });
+
+        await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).rejects.toMatchObject({
+          statusCode: 403,
+          message: expect.stringContaining('outside your demo workspace'),
+        });
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
+      });
+
+      it('allows a demo MANAGER to read a same-workspace direct report (no Graph call)', async () => {
+        mockedUserModel.findById.mockResolvedValue(
+          mockSubmitter({ is_demo: 1, demo_session_id: 'sess-1', manager_id: MANAGER_ID }),
+        );
+        const req = mockRequest({ user: demoManagerUser('sess-1') });
+
+        await expect(ensureCanAccessExpense(req, SUBMITTER_ID)).resolves.toBeUndefined();
+        expect(mockedGraphApiService.isManagerOf).not.toHaveBeenCalled();
       });
     });
   });

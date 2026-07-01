@@ -118,4 +118,23 @@ describe('authenticate owner allowlist (OWNER_OIDS)', () => {
     expect(next).toHaveBeenCalledWith();
     expect(req.user).toMatchObject({ id: 1 });
   });
+
+  it('fails OPEN when OWNER_OIDS is only whitespace/commas (parses to an empty allowlist)', async () => {
+    // Documented current behavior: ' , ,' → split/trim/filter → [] → the guard is
+    // treated as disabled, so ANY authenticated user is admitted. If someone
+    // intends the allowlist to be active, a blank-ish value silently opens it.
+    process.env.OWNER_OIDS = ' , ,';
+    mockVerify('anybody-oid');
+    const req = reqWithBearer();
+
+    await authenticate(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user).toMatchObject({ id: 1, role: Role.ADMIN });
+    // Empty allowlist == disabled: upsert proceeds and no ACCESS_DENIED is recorded.
+    expect(mockedUserModel.upsertByEntraId).toHaveBeenCalled();
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: SecurityEventType.ACCESS_DENIED }),
+    );
+  });
 });

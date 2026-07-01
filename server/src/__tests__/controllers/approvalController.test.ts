@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { approveExpense, rejectExpense, getPendingApprovals } from '../../controllers/approvalController';
 import { expenseModel } from '../../models/expense';
 import { userModel } from '../../models/user';
-import { GraphApiAuthError, graphApiService } from '../../services/graphApi';
+import { GraphApiAuthError, graphApiService, isGraphApiAuthError } from '../../services/graphApi';
 import { notificationService } from '../../services/notificationService';
 import { Role, Status, Category, Expense } from '../../types';
 
@@ -14,6 +14,7 @@ jest.mock('../../services/notificationService');
 const mockedExpenseModel = expenseModel as jest.Mocked<typeof expenseModel>;
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
 const mockedGraphApiService = graphApiService as jest.Mocked<typeof graphApiService>;
+const mockedIsGraphApiAuthError = isGraphApiAuthError as jest.MockedFunction<typeof isGraphApiAuthError>;
 const mockedNotificationService = notificationService as jest.Mocked<typeof notificationService>;
 
 const mockExpense = (overrides: Partial<Expense> = {}): Expense => ({
@@ -285,6 +286,58 @@ describe('approvalController.getPendingApprovals', () => {
       expect.objectContaining({ meta: { source: 'database', reason: 'missing_token' } }),
     );
   });
+
+  it('falls back to the database with graph_no_direct_reports when Graph returns an empty team', async () => {
+    mockedGraphApiService.getDirectReports.mockResolvedValue([]);
+    mockedExpenseModel.findPendingByManagerId.mockResolvedValue({ data: [mockExpense()], total: 1 });
+
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    expect(mockedGraphApiService.getDirectReports).toHaveBeenCalledWith(2, 'token-123');
+    // The empty-Graph branch must skip reconciliation/reassignment entirely and
+    // serve the manager's DB-scoped pending queue instead.
+    expect(mockedUserModel.findByEntraIds).not.toHaveBeenCalled();
+    expect(mockedUserModel.reassignManagerForUsers).not.toHaveBeenCalled();
+    expect(mockedExpenseModel.findPendingBySubmitterIds).not.toHaveBeenCalled();
+    expect(mockedExpenseModel.findPendingByManagerId).toHaveBeenCalledWith(2, { page: 1, pageSize: 20 });
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [expect.objectContaining({ id: 10 })],
+      pagination: { total: 1, page: 1, pageSize: 20 },
+      meta: { source: 'database', reason: 'graph_no_direct_reports' },
+    });
+  });
+
+  it('falls back with graph_consent_required when Graph delegated consent is missing', async () => {
+    mockedGraphApiService.getDirectReports.mockRejectedValue({
+      name: 'GraphApiAuthError',
+      reason: 'consent_required',
+    } as GraphApiAuthError);
+    // mockReturnValueOnce (not mockReturnValue) so this classification cannot leak
+    // into a later test in this clearAllMocks-only describe.
+    mockedIsGraphApiAuthError.mockReturnValueOnce(true);
+    mockedExpenseModel.findPendingByManagerId.mockResolvedValue({ data: [mockExpense()], total: 1 });
+
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      query: { page: '1', pageSize: '20' },
+    });
+    const res = mockResponse();
+
+    await getPendingApprovals(req as Request, res as Response, next);
+
+    expect(mockedExpenseModel.findPendingByManagerId).toHaveBeenCalledWith(2, { page: 1, pageSize: 20 });
+    expect(mockedExpenseModel.findPendingBySubmitterIds).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { source: 'database', reason: 'graph_consent_required' } }),
+    );
+  });
 });
 
 describe('approvalController.approveExpense', () => {
@@ -539,6 +592,35 @@ describe('approvalController.approveExpense', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
     expect(next).not.toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409 }));
     expect(mockedExpenseModel.approveWithVersion).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the authoritative approved shape when the committed re-read fails (never a 500)', async () => {
+    // The decision is committed (approveWithVersion SUCCESS); the re-read then
+    // fails. The controller must synthesize the post-decision row rather than let
+    // a transient read error surface as a 500 / data:null.
+    const pending = mockExpense({ submitted_by: 7, version: 3 });
+    mockedExpenseModel.findById
+      .mockResolvedValueOnce(pending) // initial load
+      .mockRejectedValueOnce(new Error('re-read boom')); // committed re-read fails
+    mockedExpenseModel.approveWithVersion.mockResolvedValue('SUCCESS');
+
+    const req = mockRequest({
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
+      params: { id: '10' },
+      ip: '127.0.0.1',
+    });
+    const res = mockResponse();
+
+    await approveExpense(req as Request, res as Response, next);
+
+    expect(mockedExpenseModel.approveWithVersion).toHaveBeenCalledWith(10, 1, 3, '127.0.0.1');
+    // A failed re-read must NOT bubble up as an error.
+    expect(next).not.toHaveBeenCalled();
+    const body = (res.json as jest.Mock).mock.calls[0][0];
+    expect(body.success).toBe(true);
+    expect(body.data.status).toBe(Status.APPROVED);
+    expect(body.data.approved_by).toBe(1);
+    expect(body.data.version).toBe(4); // original 3 + 1
   });
 });
 
@@ -802,5 +884,82 @@ describe('approvalController.rejectExpense', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
     expect(next).not.toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409 }));
     expect(mockedExpenseModel.rejectWithVersion).not.toHaveBeenCalled();
+  });
+
+  it('lets a MANAGER whose Graph relationship is confirmed reject a pending expense', async () => {
+    // Every other reject-SUCCESS test uses an ADMIN (which bypasses Graph); this
+    // exercises the live manager-via-Graph authorization path end-to-end.
+    const pending = mockExpense({ submitted_by: 7, version: 4 });
+    const rejected = {
+      ...pending,
+      status: Status.REJECTED,
+      approved_by: 2,
+      rejection_reason: 'Out of policy',
+      version: 5,
+    };
+    mockedExpenseModel.findById
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce(rejected);
+    mockedUserModel.findById.mockResolvedValue({
+      id: 7,
+      entra_id: 'entra-employee',
+      email: 'employee@test.com',
+      display_name: 'Employee One',
+      role: Role.EMPLOYEE,
+      manager_id: 2,
+      is_active: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockedGraphApiService.isManagerOf.mockResolvedValue(true);
+    mockedExpenseModel.rejectWithVersion.mockResolvedValue('SUCCESS');
+
+    // Default mockRequest user is MANAGER id 2.
+    const req = mockRequest({
+      headers: { authorization: 'Bearer token-123' },
+      params: { id: '10' },
+      body: { reason: 'Out of policy' },
+      ip: '10.0.0.1',
+    });
+    const res = mockResponse();
+
+    await rejectExpense(req as Request, res as Response, next);
+
+    expect(mockedGraphApiService.isManagerOf).toHaveBeenCalled();
+    expect(mockedExpenseModel.rejectWithVersion).toHaveBeenCalledWith(10, 2, 4, 'Out of policy', '10.0.0.1');
+    expect(mockedNotificationService.expenseDecision).toHaveBeenCalledWith({
+      expense: pending,
+      actor: req.user,
+      decision: 'REJECTED',
+    });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: rejected });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the authoritative rejected shape when the committed re-read fails (never a 500)', async () => {
+    const pending = mockExpense({ submitted_by: 7, version: 5 });
+    mockedExpenseModel.findById
+      .mockResolvedValueOnce(pending)
+      .mockRejectedValueOnce(new Error('re-read boom'));
+    mockedExpenseModel.rejectWithVersion.mockResolvedValue('SUCCESS');
+
+    const req = mockRequest({
+      user: { id: 1, role: Role.ADMIN, assignedRoles: [Role.ADMIN], email: 'admin@test.com', display_name: 'Admin' },
+      params: { id: '10' },
+      body: { reason: 'Missing receipt' },
+      ip: '127.0.0.1',
+    });
+    const res = mockResponse();
+
+    await rejectExpense(req as Request, res as Response, next);
+
+    expect(mockedExpenseModel.rejectWithVersion).toHaveBeenCalledWith(10, 1, 5, 'Missing receipt', '127.0.0.1');
+    expect(next).not.toHaveBeenCalled();
+    const body = (res.json as jest.Mock).mock.calls[0][0];
+    expect(body.success).toBe(true);
+    expect(body.data.status).toBe(Status.REJECTED);
+    expect(body.data.approved_by).toBe(1);
+    expect(body.data.rejection_reason).toBe('Missing receipt');
+    expect(body.data.version).toBe(6); // original 5 + 1
   });
 });
