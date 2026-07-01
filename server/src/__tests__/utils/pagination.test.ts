@@ -38,18 +38,43 @@ describe('parsePagination — validation', () => {
     expect(() => parsePagination({ page: value })).toThrow(AppError);
   });
 
-  it('rejects a param provided more than once (array)', () => {
+  // pageSize goes through the same parsePositiveInteger guard as page, so every
+  // invalid-value case must reject on pageSize too — not only on page.
+  it.each([
+    ['0'],
+    ['-1'],
+    ['abc'],
+    ['1.5'],
+    [''],
+  ])('rejects an invalid pageSize value %s', (value) => {
+    expect(() => parsePagination({ pageSize: value })).toThrow(AppError);
+  });
+
+  it('rejects a page param provided more than once (array)', () => {
     expect(() => parsePagination({ page: ['1', '2'] })).toThrow(AppError);
   });
 
-  it('rejects a non-string param', () => {
+  it('rejects a pageSize param provided more than once (array)', () => {
+    expect(() => parsePagination({ pageSize: ['10', '20'] })).toThrow(AppError);
+  });
+
+  it('rejects a non-string page param', () => {
     expect(() => parsePagination({ page: 5 as unknown as string })).toThrow(AppError);
+  });
+
+  it('rejects a non-string pageSize param', () => {
+    expect(() => parsePagination({ pageSize: 5 as unknown as string })).toThrow(AppError);
   });
 });
 
 describe('parsePagination — upper bounds', () => {
   it('caps pageSize at MAX_PAGE_SIZE', () => {
     const { pageSize } = parsePagination({ pageSize: String(MAX_PAGE_SIZE + 50) });
+    expect(pageSize).toBe(MAX_PAGE_SIZE);
+  });
+
+  it('leaves a pageSize at exactly MAX_PAGE_SIZE unclamped', () => {
+    const { pageSize } = parsePagination({ pageSize: String(MAX_PAGE_SIZE) });
     expect(pageSize).toBe(MAX_PAGE_SIZE);
   });
 

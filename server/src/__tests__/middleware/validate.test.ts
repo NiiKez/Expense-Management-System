@@ -1,7 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
+
+// validate.ts calls safeUnlinkReceipt(req.file.path) on ANY failure path so a
+// rejected request never orphans its just-saved upload. Stub it so we can assert
+// the cleanup without touching disk. It returns a promise (validate chains .catch).
+jest.mock('../../utils/receiptFiles', () => ({
+  __esModule: true,
+  safeUnlinkReceipt: jest.fn(() => Promise.resolve()),
+}));
+
 import { validate } from '../../middleware/validate';
 import { createExpenseSchema, updateExpenseSchema } from '../../validations/expenseSchema';
 import { MIN_EXPENSE_AMOUNT, MAX_EXPENSE_AMOUNT } from '../../utils/constants';
+import { safeUnlinkReceipt } from '../../utils/receiptFiles';
+
+const mockedUnlink = safeUnlinkReceipt as jest.MockedFunction<typeof safeUnlinkReceipt>;
 
 // Helper to create mock req/res/next
 const mockRequest = (body: unknown): Partial<Request> => ({ body });
@@ -417,6 +429,46 @@ describe('validate middleware', () => {
 
       expect(next).toHaveBeenCalledWith(thrownError);
       expect(res.status).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Orphaned-receipt cleanup on validation failure ───────────────────────────
+  describe('uploaded-receipt cleanup on failure', () => {
+    beforeEach(() => mockedUnlink.mockClear());
+
+    it('unlinks the just-saved receipt when the body fails Zod validation', () => {
+      const req = { body: {}, file: { path: '/tmp/receipts/orphan.png' } } as unknown as Request;
+      const res = mockResponse();
+
+      validate(createExpenseSchema)(req as Request, res as Response, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(next).not.toHaveBeenCalled();
+      expect(mockedUnlink).toHaveBeenCalledWith('/tmp/receipts/orphan.png');
+    });
+
+    it('unlinks the just-saved receipt on a non-Zod (unexpected) failure too', () => {
+      const thrown = new Error('boom');
+      const faultySchema = { parse: () => { throw thrown; } };
+      const req = { body: {}, file: { path: '/tmp/receipts/orphan2.pdf' } } as unknown as Request;
+      const res = mockResponse();
+
+      validate(faultySchema as never)(req as Request, res as Response, next);
+
+      expect(mockedUnlink).toHaveBeenCalledWith('/tmp/receipts/orphan2.pdf');
+      expect(next).toHaveBeenCalledWith(thrown);
+    });
+
+    it('does NOT unlink when the failing request carried no uploaded file', () => {
+      // Control: cleanup is conditional on req.file, so a bodiless failure must
+      // not call unlink at all (otherwise the guard is meaningless).
+      const req = mockRequest({});
+      const res = mockResponse();
+
+      validate(createExpenseSchema)(req as Request, res as Response, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(mockedUnlink).not.toHaveBeenCalled();
     });
   });
 });

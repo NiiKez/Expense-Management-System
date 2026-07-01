@@ -210,6 +210,77 @@ describe('errorHandler', () => {
     expect(mockedLogger.warn).toHaveBeenCalledWith('Operational error', {
       statusCode: 409,
       message: 'Conflict',
+      requestId: undefined,
+    });
+  });
+
+  // ── requestId correlation + status-source / >=500 branches ─────────────────
+  // The earlier tests all pass `{} as Request`, so `req.id` is undefined and the
+  // handler would still pass if it dropped requestId entirely. These pin that the
+  // X-Request-Id correlation id is echoed on every branch, and lock the exact
+  // status-source semantics.
+  describe('requestId propagation and status-source branches', () => {
+    const reqWithId = { id: 'req-123' } as unknown as Request;
+    const bodyOf = (res: Partial<Response>) =>
+      (res.json as jest.Mock).mock.calls[0][0] as { error: { requestId?: string } };
+
+    it('echoes req.id as error.requestId on an AppError response', () => {
+      const res = mockResponse();
+      errorHandler(new AppError(403, 'Insufficient permissions'), reqWithId, res as Response, jest.fn() as NextFunction);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(bodyOf(res).error.requestId).toBe('req-123');
+    });
+
+    it('echoes req.id as error.requestId on a generic 4xx HTTP-error response', () => {
+      const err = Object.assign(new Error('parse boom'), { status: 400, type: 'entity.parse.failed' });
+      const res = mockResponse();
+      errorHandler(err, reqWithId, res as Response, jest.fn() as NextFunction);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(bodyOf(res).error.requestId).toBe('req-123');
+    });
+
+    it('echoes req.id as error.requestId on the generic 500 response', () => {
+      const res = mockResponse();
+      errorHandler(new Error('kaboom'), reqWithId, res as Response, jest.fn() as NextFunction);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(bodyOf(res).error.requestId).toBe('req-123');
+    });
+
+    it('honors err.statusCode (not just err.status) for a 4xx and maps to the generic message', () => {
+      // An error carrying ONLY statusCode (no `status`) must still be recognised
+      // as a 415 and mapped to the fixed message, never echoing err.message.
+      const err = Object.assign(new Error('leaky charset detail xyz'), { statusCode: 415 });
+      const res = mockResponse();
+      errorHandler(err, {} as Request, res as Response, jest.fn() as NextFunction);
+
+      expect(res.status).toHaveBeenCalledWith(415);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.objectContaining({ message: 'Unsupported media type', statusCode: 415 }),
+        }),
+      );
+      expect(JSON.stringify(bodyOf(res))).not.toContain('leaky charset detail');
+    });
+
+    it('treats a >=500 http-error (status 503) as a generic 500 — never echoing the upstream status/message', () => {
+      // getHttpErrorStatus only trusts 4xx; a 5xx from a transitive library must
+      // collapse to the opaque 500 path (and be logged as an unhandled error),
+      // not be forwarded to the client.
+      const err = Object.assign(new Error('upstream 503 gateway detail'), { status: 503, type: 'bad.gateway' });
+      const res = mockResponse();
+      errorHandler(err, {} as Request, res as Response, jest.fn() as NextFunction);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = JSON.stringify(bodyOf(res));
+      expect(body).toContain('Internal server error');
+      expect(body).not.toContain('503');
+      expect(body).not.toContain('gateway detail');
+      // >=500 goes through the unhandled-error logger, not the operational warn.
+      expect(mockedLogger.error).toHaveBeenCalledWith('Unhandled error', expect.any(Object));
     });
   });
 });

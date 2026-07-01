@@ -179,6 +179,42 @@ describe('authenticate demo auth', () => {
     expect(req.user?.demoSessionId).toBeUndefined();
   });
 
+  it('falls through (no demo lookup) for an oversized Bearer header', async () => {
+    // The demo path caps the header at 8192 chars before doing any work, so a
+    // giant token can't force a verify/DB lookup. It falls through to Entra,
+    // whose own length guard 401s it up front.
+    mockedUserModel.findById.mockResolvedValue(demoUser());
+    const req = reqWithToken('x'.repeat(9000)); // "Bearer " + 9000 = 9007 > 8192
+
+    await authenticate(req, {} as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number; message?: string };
+    expect(err.statusCode).toBe(401);
+    expect(req.user).toBeUndefined();
+    expect(mockedUserModel.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expired demo token without ever looking up (or attaching) the user', async () => {
+    // Even though the row is a perfectly valid, unexpired demo workspace, an
+    // EXPIRED token must not authenticate: verification fails, the demo path
+    // falls through, and Entra then 401s the HS256 token. If exp were ignored,
+    // findById would run and req.user would be set — so this pins the exp check.
+    mockedUserModel.findById.mockResolvedValue(demoUser());
+    const expired = jwt.sign(
+      { sub: '42', demo: true, role: Role.MANAGER },
+      DEMO_SECRET,
+      { algorithm: 'HS256', expiresIn: -10 },
+    );
+    const req = reqWithToken(expired);
+
+    await authenticate(req, {} as Response, next);
+
+    const err = next.mock.calls[0][0] as { statusCode?: number };
+    expect(err.statusCode).toBe(401);
+    expect(req.user).toBeUndefined();
+    expect(mockedUserModel.findById).not.toHaveBeenCalled();
+  });
+
   it('falls through to Entra for a token not signed by the demo secret', async () => {
     // A token signed with a different secret can't be a demo token; it must not be
     // treated as one, and no demo DB lookup should happen — it falls to Entra auth

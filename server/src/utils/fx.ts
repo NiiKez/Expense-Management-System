@@ -38,9 +38,16 @@ export function convertToBase(amount: number, currency: string): number {
       currency: code,
     });
   }
-  // Add Number.EPSILON before scaling so half-cent values stored just below
-  // their decimal (e.g. 1.005 -> 1.00499999...) round to the intended cent.
-  return Math.round((amount * (rate ?? 1) + Number.EPSILON) * 100) / 100;
+  // Round half AWAY FROM ZERO at cent precision. We round the *magnitude* with a
+  // tiny cent-scale nudge — so a half-cent stored just below its decimal (float
+  // error, e.g. 1.005 -> 1.00499999...) still rounds up — then reapply the sign.
+  // Doing it on the magnitude keeps refunds/negative adjustments symmetric with
+  // their positive mirror (-1.005 -> -1.01, matching +1.005 -> 1.01) and aligns
+  // with MySQL ROUND()'s half-away-from-zero semantics used by sumInBaseSql.
+  const scaled = amount * (rate ?? 1);
+  const cents = Math.round(Math.abs(scaled) * 100 + 1e-9);
+  const result = (Math.sign(scaled) * cents) / 100;
+  return result === 0 ? 0 : result; // normalize -0 to 0
 }
 
 /**

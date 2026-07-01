@@ -121,6 +121,104 @@ describe('auditLogModel.findAllForExport demo isolation', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STRENGTHENED per-call assertions.
+//
+// The suites above concat all SQL (allSql) before matching, so a leak in ONLY the
+// COUNT query (which uses pool.execute) while the DATA query (pool.query) stays
+// scoped would still pass. These pin the demo predicate on EACH mock call
+// individually — both the count `execute` and the data `query` — and assert the
+// session id is bound exactly once per parametrized statement (never dropped from
+// one half, never double-bound).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How many times the demo session id is bound in a single statement's params. */
+function sessionBindCount(params: unknown[] | undefined): number {
+  return (params ?? []).filter((p) => p === SESSION).length;
+}
+
+describe('expenseModel.findAll — per-call demo predicate', () => {
+  it('excludes demo rows in BOTH the count (execute) and data (query) statements', async () => {
+    await expenseModel.findAll({});
+
+    const [countSql, countParams] = mockedPool.execute.mock.calls[0];
+    const [dataSql, dataParams] = mockedPool.query.mock.calls[0];
+
+    expect(countSql).toContain('u.is_demo = FALSE');
+    expect(dataSql).toContain('u.is_demo = FALSE');
+    expect(countSql).not.toContain('u.is_demo = TRUE');
+    expect(dataSql).not.toContain('u.is_demo = TRUE');
+    expect(countParams).not.toContain(SESSION);
+    expect(dataParams).not.toContain(SESSION);
+  });
+
+  it('scopes BOTH statements to the workspace, binding the session once each', async () => {
+    await expenseModel.findAll({ demoSessionId: SESSION });
+
+    const [countSql, countParams] = mockedPool.execute.mock.calls[0];
+    const [dataSql, dataParams] = mockedPool.query.mock.calls[0];
+
+    expect(countSql).toContain('u.is_demo = TRUE AND u.demo_session_id = ?');
+    expect(dataSql).toContain('u.is_demo = TRUE AND u.demo_session_id = ?');
+    expect(countSql).not.toContain('u.is_demo = FALSE');
+    expect(dataSql).not.toContain('u.is_demo = FALSE');
+    expect(sessionBindCount(countParams)).toBe(1);
+    expect(sessionBindCount(dataParams)).toBe(1);
+  });
+});
+
+describe('expenseModel.findAllForExport — per-call demo predicate', () => {
+  it('excludes demo rows in the export query', async () => {
+    await expenseModel.findAllForExport({});
+    const [sql, params] = mockedPool.query.mock.calls[0];
+    expect(sql).toContain('u.is_demo = FALSE');
+    expect(params).not.toContain(SESSION);
+  });
+
+  it('scopes the export query to the workspace, binding the session once', async () => {
+    await expenseModel.findAllForExport({ demoSessionId: SESSION });
+    const [sql, params] = mockedPool.query.mock.calls[0];
+    expect(sql).toContain('u.is_demo = TRUE AND u.demo_session_id = ?');
+    expect(sessionBindCount(params)).toBe(1);
+  });
+});
+
+describe('auditLogModel.findAll — per-call demo predicate', () => {
+  it('excludes demo-performed rows in BOTH the count and data statements', async () => {
+    await auditLogModel.findAll({});
+    const [countSql] = mockedPool.execute.mock.calls[0];
+    const [dataSql] = mockedPool.query.mock.calls[0];
+    expect(countSql).toContain('performed_by IN (SELECT id FROM users WHERE is_demo = FALSE)');
+    expect(dataSql).toContain('performed_by IN (SELECT id FROM users WHERE is_demo = FALSE)');
+  });
+
+  it('scopes BOTH statements to the workspace, binding the session once each', async () => {
+    await auditLogModel.findAll({ demoSessionId: SESSION });
+    const [countSql, countParams] = mockedPool.execute.mock.calls[0];
+    const [dataSql, dataParams] = mockedPool.query.mock.calls[0];
+    const predicate = 'performed_by IN (SELECT id FROM users WHERE is_demo = TRUE AND demo_session_id = ?)';
+    expect(countSql).toContain(predicate);
+    expect(dataSql).toContain(predicate);
+    expect(sessionBindCount(countParams)).toBe(1);
+    expect(sessionBindCount(dataParams)).toBe(1);
+  });
+});
+
+describe('auditLogModel.findAllForExport — per-call demo predicate', () => {
+  it('excludes demo-performed rows in the export query', async () => {
+    await auditLogModel.findAllForExport({});
+    const [sql] = mockedPool.query.mock.calls[0];
+    expect(sql).toContain('u.is_demo = FALSE');
+  });
+
+  it('scopes the export query to the workspace, binding the session once', async () => {
+    await auditLogModel.findAllForExport({ demoSessionId: SESSION });
+    const [sql, params] = mockedPool.query.mock.calls[0];
+    expect(sql).toContain('u.is_demo = TRUE AND u.demo_session_id = ?');
+    expect(sessionBindCount(params)).toBe(1);
+  });
+});
+
 describe('statsModel.getOrgStats demo isolation', () => {
   it('excludes demo data from every aggregate for a real admin', async () => {
     await statsModel.getOrgStats();

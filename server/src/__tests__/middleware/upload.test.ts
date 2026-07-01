@@ -88,6 +88,14 @@ describe('upload multer configuration', () => {
   it('exposes a single("receipt") middleware factory', () => {
     expect(typeof (upload as unknown as { single: unknown }).single).toBe('function');
   });
+
+  it('wires the anti-abuse multipart caps (fields, parts, fieldSize), not just fileSize/files', () => {
+    // Without these, a multipart body could carry unbounded non-file fields/parts
+    // to exhaust memory even though the single file is size-capped.
+    expect(multerOptions.limits.fields).toBe(10);
+    expect(multerOptions.limits.parts).toBe(12);
+    expect(multerOptions.limits.fieldSize).toBe(10 * 1024);
+  });
 });
 
 // ── fileFilter: MIME allowlist ─────────────────────────────────────

@@ -461,6 +461,72 @@ describe('adminController', () => {
       );
     });
 
+    it('records every supplied filter in the AUDIT_LOG_EXPORTED security event', async () => {
+      mockedAuditLogModel.findAllForExport.mockResolvedValue({
+        data: [mockAuditExportRow()],
+        capped: false,
+      });
+
+      const req = mockRequest({
+        query: {
+          expense_id: '10',
+          performed_by: '7',
+          date_from: '2026-01-01',
+          date_to: '2026-02-01',
+        },
+      });
+      const res = mockResponse();
+
+      await exportAuditLogs(req as Request, res as Response, next);
+
+      expect(mockedAuditLogModel.findAllForExport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expense_id: 10,
+          performed_by: 7,
+          date_from: '2026-01-01',
+          date_to: '2026-02-01',
+        }),
+      );
+      // Concrete filter values must be recorded so the export is fully attributable.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.AUDIT_LOG_EXPORTED,
+          outcome: SecurityOutcome.SUCCESS,
+          user_id: 3,
+          role: Role.ADMIN,
+          metadata: expect.objectContaining({
+            row_count: 1,
+            filters: {
+              expense_id: 10,
+              performed_by: 7,
+              date_from: '2026-01-01',
+              date_to: '2026-02-01',
+            },
+          }),
+        }),
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('still sends the CSV when the security-event write fails (best-effort)', async () => {
+      // The AUDIT_LOG_EXPORTED write is best-effort: a logging-table outage must
+      // never turn a privileged export into a 500. The controller guards the
+      // record() call, so even a rejection is swallowed and the export completes.
+      mockedAuditLogModel.findAllForExport.mockResolvedValue({
+        data: [mockAuditExportRow()],
+        capped: false,
+      });
+      mockedSecurityEvent.record.mockRejectedValue(new Error('security_events insert failed'));
+
+      const req = mockRequest({ query: { action: AuditAction.APPROVED } });
+      const res = mockResponse();
+
+      await exportAuditLogs(req as Request, res as Response, next);
+
+      expect(res.send).toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+    });
+
     it('neutralizes CSV formula injection in the performer name', async () => {
       mockedAuditLogModel.findAllForExport.mockResolvedValue({
         data: [{ ...mockAuditExportRow(), performer_name: '=HYPERLINK("http://evil")' }],

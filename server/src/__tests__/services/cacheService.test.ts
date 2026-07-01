@@ -66,6 +66,39 @@ describe('cacheService', () => {
   });
 });
 
+describe('cacheService TTL / expiry', () => {
+  // node-cache checks expiry lazily on get() against Date.now(); Jest's modern fake
+  // timers fake Date, so advancing the clock past the TTL makes the key expire
+  // deterministically without any real wait.
+  beforeEach(() => {
+    jest.useFakeTimers();
+    cacheService.flushAll();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('expires a key once its TTL elapses', () => {
+    cacheService.set('k', 'v', 1); // 1-second TTL
+    expect(cacheService.get('k')).toBe('v');
+
+    jest.advanceTimersByTime(1500); // past the 1s TTL
+    expect(cacheService.get('k')).toBeUndefined();
+  });
+
+  it('honors a custom TTL independently of the 15-minute default (OBO-token cache relies on this)', () => {
+    cacheService.set('short', 'v', 1); // explicit short TTL
+    cacheService.set('long', 'v'); // default 15-minute TTL
+
+    jest.advanceTimersByTime(2000); // past the short TTL, far below the default
+
+    // The custom short TTL differs from the default: only the short key is gone.
+    expect(cacheService.get('short')).toBeUndefined();
+    expect(cacheService.get('long')).toBe('v');
+  });
+});
+
 describe('cacheService maxKeys degradation', () => {
   const ORIGINAL_MAX_KEYS = process.env.CACHE_MAX_KEYS;
 

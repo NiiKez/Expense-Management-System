@@ -195,16 +195,26 @@ export const exportAuditLogs = async (req: Request, res: Response, next: NextFun
     if (parsedDateFrom) filters.date_from = parsedDateFrom;
     if (parsedDateTo) filters.date_to = parsedDateTo;
 
-    await securityEventModel.record({
-      event_type: SecurityEventType.AUDIT_LOG_EXPORTED,
-      outcome: SecurityOutcome.SUCCESS,
-      user_id: req.user?.id ?? null,
-      role: req.user?.role ?? null,
-      ip_address: req.ip ?? null,
-      request_id: req.id ?? null,
-      detail: `Exported ${data.length} audit-log row(s)`,
-      metadata: { filters, row_count: data.length, capped },
-    });
+    // Best-effort: the audit-of-the-audit write must never turn a logging-table
+    // outage into a failed privileged export. securityEventModel.record already
+    // swallows its own errors, but guard at the call site too so a future contract
+    // change can't propagate a record() rejection into the response path.
+    try {
+      await securityEventModel.record({
+        event_type: SecurityEventType.AUDIT_LOG_EXPORTED,
+        outcome: SecurityOutcome.SUCCESS,
+        user_id: req.user?.id ?? null,
+        role: req.user?.role ?? null,
+        ip_address: req.ip ?? null,
+        request_id: req.id ?? null,
+        detail: `Exported ${data.length} audit-log row(s)`,
+        metadata: { filters, row_count: data.length, capped },
+      });
+    } catch (recordErr) {
+      logger.warn('Failed to record AUDIT_LOG_EXPORTED security event', {
+        err: recordErr instanceof Error ? recordErr.message : String(recordErr),
+      });
+    }
 
     const csv = toCsv(
       ['ID', 'Expense ID', 'Action', 'Performed By', 'Old Status', 'New Status', 'Details', 'When'],

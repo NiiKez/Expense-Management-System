@@ -35,13 +35,18 @@ const attackerPrivatePem = attackerKeys.privateKey.export({ type: 'pkcs8', forma
 // jest.mock factories may only reference outer names prefixed with `mock`.
 const mockPublicKeyPem = realKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-// ── Stub the JWKS client: always return our real public key ───
+// When set, the stubbed JWKS getSigningKey reports this error instead of returning
+// a key — used to exercise the "kid not found" / key-rollover failure path. Reset
+// to null after each test that flips it so the default (return-key) behaviour holds.
+let mockJwksError: Error | null = null;
+
+// ── Stub the JWKS client: return our real public key, or an error on demand ───
 jest.mock('jwks-rsa', () =>
   jest.fn(() => ({
     getSigningKey: (
       _kid: string,
       cb: (err: Error | null, key?: { getPublicKey: () => string }) => void,
-    ) => cb(null, { getPublicKey: () => mockPublicKeyPem }),
+    ) => (mockJwksError ? cb(mockJwksError) : cb(null, { getPublicKey: () => mockPublicKeyPem })),
   })),
 );
 
@@ -265,6 +270,28 @@ describe('authenticate — real Entra ID JWT path', () => {
       const { err } = await run(makeReq(signToken({}, { keyid: 'k'.repeat(201) })));
 
       expect(err?.statusCode).toBe(401);
+    });
+
+    it('rejects with 401 (and records AUTH_FAILURE) when JWKS reports the kid is unknown', async () => {
+      // Key-rollover / forged-kid case: the signature can't be verified because
+      // the JWKS lookup itself fails. The token is otherwise well-formed and
+      // correctly signed, so ONLY the getSigningKey error path can reject it.
+      mockJwksError = new Error('kid not found');
+      try {
+        const { err, req } = await run(makeReq(signToken()));
+
+        expect(err?.statusCode).toBe(401);
+        expect(req.user).toBeUndefined();
+        expect(mockedUserModel.upsertByEntraId).not.toHaveBeenCalled();
+        expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event_type: SecurityEventType.AUTH_FAILURE,
+            outcome: SecurityOutcome.FAILURE,
+          }),
+        );
+      } finally {
+        mockJwksError = null;
+      }
     });
   });
 

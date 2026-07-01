@@ -15,14 +15,21 @@ jest.mock('../../models/expense');
 jest.mock('../../models/receipt');
 jest.mock('../../models/user');
 jest.mock('../../services/graphApi');
+// Partial-mock: the real path-confinement + header sanitizers must stay live for
+// the downloadReceipt tests below; only safeUnlinkReceipt is stubbed so
+// createExpense's orphan-cleanup can be asserted without disk I/O.
+jest.mock('../../utils/receiptFiles', () => {
+  const actual = jest.requireActual('../../utils/receiptFiles');
+  return { __esModule: true, ...actual, safeUnlinkReceipt: jest.fn().mockResolvedValue(undefined) };
+});
 
 import fs from 'fs/promises';
 import { expenseModel } from '../../models/expense';
 import { receiptModel } from '../../models/receipt';
 import { userModel } from '../../models/user';
 import { graphApiService } from '../../services/graphApi';
-import { downloadReceipt } from '../../controllers/expenseController';
-import { RECEIPT_UPLOAD_DIR } from '../../utils/receiptFiles';
+import { createExpense, downloadReceipt } from '../../controllers/expenseController';
+import { RECEIPT_UPLOAD_DIR, safeUnlinkReceipt, sanitizeReceiptDownloadName } from '../../utils/receiptFiles';
 import { Status, Category, Role, Expense, Receipt, User } from '../../types';
 import { AppError } from '../../utils/errors';
 
@@ -31,6 +38,7 @@ const mockedExpenseModel = expenseModel as jest.Mocked<typeof expenseModel>;
 const mockedReceiptModel = receiptModel as jest.Mocked<typeof receiptModel>;
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
 const mockedGraphApiService = graphApiService as jest.Mocked<typeof graphApiService>;
+const mockedSafeUnlinkReceipt = safeUnlinkReceipt as jest.MockedFunction<typeof safeUnlinkReceipt>;
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -416,5 +424,129 @@ describe('expenseController.downloadReceipt', () => {
 
     expect(next).toHaveBeenCalledWith(dbError);
     expect(res.sendFile).not.toHaveBeenCalled();
+  });
+});
+
+// ── createExpense (receipt persistence + orphan cleanup) ─────────────
+
+describe('expenseController.createExpense (receipt path)', () => {
+  let next: jest.MockedFunction<NextFunction>;
+
+  const validBody = {
+    title: 'Flight to NYC',
+    description: 'Business trip',
+    amount: 450,
+    currency: 'USD',
+    category: Category.TRAVEL,
+    expense_date: '2026-03-01',
+  };
+
+  const mockFile = (overrides: Partial<Express.Multer.File> = {}): Express.Multer.File =>
+    ({
+      fieldname: 'receipt',
+      originalname: 'invoice.pdf',
+      encoding: '7bit',
+      mimetype: 'application/pdf',
+      destination: RECEIPT_UPLOAD_DIR,
+      filename: 'stored-receipt.pdf',
+      path: path.join(RECEIPT_UPLOAD_DIR, 'stored-receipt.pdf'),
+      size: 2048,
+      ...overrides,
+    } as unknown as Express.Multer.File);
+
+  beforeEach(() => {
+    next = jest.fn();
+    jest.clearAllMocks();
+    mockedSafeUnlinkReceipt.mockResolvedValue(undefined);
+  });
+
+  it('persists the SANITIZED file_name and echoes the serialized receipt', async () => {
+    // originalname is attacker-controlled (multer): header-injection + traversal.
+    const originalname = 'a"b;c\r\n../../etc/passwd.pdf';
+    const expectedName = sanitizeReceiptDownloadName(originalname).slice(0, 255);
+    // Prove the sanitization is load-bearing: the stored name differs and drops
+    // the dangerous quote/CRLF characters.
+    expect(expectedName).not.toBe(originalname);
+    expect(expectedName).not.toMatch(/["\r\n]/);
+
+    const file = mockFile({ originalname });
+    const expense = mockExpense();
+    const receipt = mockReceipt({ id: 5, file_name: expectedName });
+    mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt });
+
+    const req = mockRequest({ body: validBody, file });
+    const res = mockResponse();
+
+    await createExpense(req as Request, res as Response, next);
+
+    expect(mockedExpenseModel.createSubmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receipt: {
+          file_name: expectedName,
+          file_path: file.path,
+          mime_type: 'application/pdf',
+          file_size: 2048,
+        },
+        ipAddress: '127.0.0.1',
+      }),
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        ...expense,
+        receipts: [
+          {
+            id: receipt.id,
+            expense_id: receipt.expense_id,
+            file_name: expectedName,
+            mime_type: receipt.mime_type,
+            file_size: receipt.file_size,
+            uploaded_at: receipt.uploaded_at,
+          },
+        ],
+      },
+    });
+    // A committed receipt is never cleaned up.
+    expect(mockedSafeUnlinkReceipt).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the orphaned upload when createSubmission rejects', async () => {
+    const file = mockFile();
+    const dbError = new Error('createSubmission failed');
+    mockedExpenseModel.createSubmission.mockRejectedValue(dbError);
+
+    const req = mockRequest({ body: validBody, file });
+    const res = mockResponse();
+
+    await createExpense(req as Request, res as Response, next);
+
+    // The receipt never persisted, so its temp file must be unlinked.
+    expect(mockedSafeUnlinkReceipt).toHaveBeenCalledTimes(1);
+    expect(mockedSafeUnlinkReceipt).toHaveBeenCalledWith(file.path);
+    expect(next).toHaveBeenCalledWith(dbError);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('does NOT delete a committed receipt when a later step throws (receiptPersisted guard)', async () => {
+    const file = mockFile();
+    const expense = mockExpense();
+    const receipt = mockReceipt({ id: 5 });
+    mockedExpenseModel.createSubmission.mockResolvedValue({ expense, receipt });
+
+    const req = mockRequest({ body: validBody, file });
+    const res = mockResponse();
+    // Force a throw AFTER the receipt is committed (receiptPersisted === true).
+    const boom = new Error('response serialization boom');
+    (res.json as jest.Mock).mockImplementation(() => {
+      throw boom;
+    });
+
+    await createExpense(req as Request, res as Response, next);
+
+    // The file now belongs to a persisted expense — it must NOT be unlinked.
+    expect(mockedSafeUnlinkReceipt).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(boom);
   });
 });
