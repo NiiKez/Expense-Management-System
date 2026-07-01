@@ -15,6 +15,13 @@ jest.mock('@/services/auth', () => ({
   msalReady: Promise.resolve(),
   loginRequest: { scopes: [] },
 }))
+// Spy on navigation while keeping the real MemoryRouter that renderWithProviders
+// mounts. `mock`-prefixed so the jest.mock factory may reference it.
+const mockNavigate = jest.fn()
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useNavigate: () => mockNavigate,
+}))
 
 import api from '@/services/api'
 import NotificationBell from '@/components/layout/NotificationBell'
@@ -93,5 +100,80 @@ describe('NotificationBell', () => {
     await waitFor(() =>
       expect(mockedApi.post).toHaveBeenCalledWith('/notifications/read-all'),
     )
+  })
+
+  it('marks a single unread item read and navigates to its expense', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationBell />)
+
+    await screen.findByTestId('notification-badge')
+    await user.click(screen.getByTestId('notification-bell'))
+
+    // NOTIF is unread (is_read 0) with expense_id 7 → mark-read PATCH + navigate.
+    const item = await screen.findByTestId('notification-item-1')
+    await user.click(item)
+
+    await waitFor(() =>
+      expect(mockedApi.patch).toHaveBeenCalledWith('/notifications/1/read'),
+    )
+    expect(mockNavigate).toHaveBeenCalledWith('/expenses/7')
+  })
+
+  it('caps the unread badge at "9+" and reflects the count in the aria-label', async () => {
+    mockedApi.get.mockImplementation((url: string) => {
+      if (url === '/notifications/unread-count') {
+        return Promise.resolve({ data: { success: true, data: { count: 12 } } })
+      }
+      if (url === '/notifications') {
+        return Promise.resolve({ data: { success: true, data: [NOTIF], meta: { unread: 12 } } })
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`))
+    })
+
+    renderWithProviders(<NotificationBell />)
+
+    const badge = await screen.findByTestId('notification-badge')
+    expect(badge).toHaveTextContent('9+')
+    expect(screen.getByTestId('notification-bell')).toHaveAttribute(
+      'aria-label',
+      'Notifications (12 unread)',
+    )
+  })
+
+  it('shows the loading state while the list is being fetched', async () => {
+    mockedApi.get.mockImplementation((url: string) => {
+      if (url === '/notifications/unread-count') {
+        return Promise.resolve({ data: { success: true, data: { count: 3 } } })
+      }
+      // Never resolves → the list query stays pending and the loader shows.
+      if (url === '/notifications') return new Promise(() => {})
+      return Promise.reject(new Error(`unexpected GET ${url}`))
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationBell />)
+
+    await screen.findByTestId('notification-badge')
+    await user.click(screen.getByTestId('notification-bell'))
+
+    expect(await screen.findByText('Loading…')).toBeInTheDocument()
+  })
+
+  it('shows the empty state when there are no notifications', async () => {
+    mockedApi.get.mockImplementation((url: string) => {
+      if (url === '/notifications/unread-count') {
+        return Promise.resolve({ data: { success: true, data: { count: 0 } } })
+      }
+      if (url === '/notifications') {
+        return Promise.resolve({ data: { success: true, data: [], meta: { unread: 0 } } })
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`))
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<NotificationBell />)
+
+    // Count is 0 → no badge; open the popover via the bell trigger directly.
+    await user.click(screen.getByTestId('notification-bell'))
+
+    expect(await screen.findByText('No notifications yet.')).toBeInTheDocument()
   })
 })

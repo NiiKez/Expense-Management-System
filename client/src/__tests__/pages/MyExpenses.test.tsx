@@ -37,9 +37,15 @@ jest.mock('@/services/auth', () => ({
   loginRequest: { scopes: [] },
 }))
 jest.mock('@/lib/download', () => ({ downloadFile: jest.fn() }))
+// The export-failure path surfaces a sonner toast; mock it so we can assert the
+// call without rendering the real toaster.
+jest.mock('sonner', () => ({
+  toast: { error: jest.fn(), success: jest.fn(), message: jest.fn() },
+}))
 
 import api from '@/services/api'
 import { downloadFile } from '@/lib/download'
+import { toast } from 'sonner'
 import MyExpenses from '@/pages/MyExpenses'
 import { renderWithProviders } from '../helpers/renderWithProviders'
 import { mockExpense, mockPaginatedResponse } from '../helpers/factories'
@@ -55,6 +61,7 @@ function paramsOf(call: unknown[]): Record<string, unknown> | undefined {
 beforeEach(() => {
   mockedGet.mockReset()
   mockedDownload.mockReset()
+  ;(toast.error as jest.Mock).mockClear()
   mockedGet.mockResolvedValue({
     data: mockPaginatedResponse([mockExpense({ id: 1, title: 'Lunch' })]),
   })
@@ -165,6 +172,78 @@ describe('MyExpenses filters', () => {
       expect(paramsOf(call as unknown[])?.page).toBe(1)
     })
   })
+
+  it('refetches with the new category param when the category filter changes', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<MyExpenses />)
+
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled())
+
+    await user.click(screen.getByLabelText('Filter by category'))
+    const listbox = await screen.findByRole('listbox')
+    // Option labels are Title-cased (formatCategory) — 'TRAVEL' → 'Travel'.
+    await user.click(within(listbox).getByText('Travel'))
+
+    await waitFor(() => {
+      const call = mockedGet.mock.calls.find((c) => paramsOf(c)?.category === 'TRAVEL')
+      expect(call).toBeDefined()
+      expect(paramsOf(call as unknown[])?.page).toBe(1)
+    })
+  })
+})
+
+describe('MyExpenses sorting', () => {
+  it('sends sort+order params and toggles the order when a header is re-clicked', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<MyExpenses />)
+
+    // The sortable table only renders once rows are present.
+    await screen.findByText('Lunch')
+
+    // First click on a fresh column starts descending (see nextSort).
+    await user.click(screen.getByTestId('sort-amount'))
+    await waitFor(() => {
+      const call = mockedGet.mock.calls.find(
+        (c) => paramsOf(c)?.sort === 'amount' && paramsOf(c)?.order === 'desc',
+      )
+      expect(call).toBeDefined()
+      // Sorting resets to page 1.
+      expect(paramsOf(call as unknown[])?.page).toBe(1)
+    })
+
+    // Re-clicking the active column flips to ascending.
+    await user.click(screen.getByTestId('sort-amount'))
+    await waitFor(() => {
+      expect(
+        mockedGet.mock.calls.some(
+          (c) => paramsOf(c)?.sort === 'amount' && paramsOf(c)?.order === 'asc',
+        ),
+      ).toBe(true)
+    })
+  })
+})
+
+describe('MyExpenses pagination', () => {
+  it('disables Previous on page 1 and enables it after advancing a page', async () => {
+    const user = userEvent.setup()
+    // Enough rows to span multiple pages so the pagination controls render.
+    mockedGet.mockResolvedValue({
+      data: mockPaginatedResponse(
+        [mockExpense({ id: 1, title: 'Lunch' })],
+        { total: 60, page: 1, pageSize: 20 },
+      ),
+    })
+    renderWithProviders(<MyExpenses />)
+
+    await screen.findByText('Lunch')
+
+    const prev = screen.getByRole('button', { name: /Previous/ })
+    expect(prev).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Next/ })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /Next/ }))
+    await waitFor(() => expect(prev).toBeEnabled())
+  })
 })
 
 describe('MyExpenses export', () => {
@@ -188,6 +267,20 @@ describe('MyExpenses export', () => {
       '/expenses/export',
       expect.objectContaining({ search: 'hotel' }),
       'my-expenses.csv',
+    )
+  })
+
+  it('surfaces an error toast when the export download fails', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<MyExpenses />)
+
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled())
+
+    mockedDownload.mockRejectedValueOnce(new Error('network down'))
+    await user.click(screen.getByTestId('export-csv'))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to export expenses.'),
     )
   })
 })

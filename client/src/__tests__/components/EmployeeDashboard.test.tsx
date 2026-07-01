@@ -81,4 +81,56 @@ describe('EmployeeDashboard', () => {
     expect(screen.getByText('Client Dinner')).toBeInTheDocument()
     expect(screen.getByText('Taxi to Airport')).toBeInTheDocument()
   })
+
+  it('renders skeleton placeholders while the queries are pending', () => {
+    mockedGet.mockReset()
+    mockedGet.mockReturnValue(new Promise(() => {})) // never resolves → stays pending
+
+    const { container } = renderWithProviders(<EmployeeDashboard />)
+
+    // The stat + list skeletons render; the resolved happy content does not yet.
+    expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Total submitted')).not.toBeInTheDocument()
+  })
+
+  it('shows the "Could not load stats" empty state when the stats query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/me/stats') return Promise.reject(new Error('boom'))
+      // Keep the list happy so we isolate the stats failure.
+      return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 20 } } })
+    })
+
+    renderWithProviders(<EmployeeDashboard />)
+
+    expect(await screen.findByText('Could not load stats')).toBeInTheDocument()
+  })
+
+  it('shows the list error empty state when the expenses query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/me/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/expenses') return Promise.reject(new Error('boom'))
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<EmployeeDashboard />)
+
+    expect(await screen.findByText('Could not load expenses')).toBeInTheDocument()
+  })
+
+  it('shows the empty-list state when no expenses come back', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/me/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/expenses') {
+        return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 20 } } })
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<EmployeeDashboard />)
+
+    expect(await screen.findByText('No expenses yet')).toBeInTheDocument()
+  })
 })

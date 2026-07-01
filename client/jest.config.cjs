@@ -60,23 +60,31 @@ const config = {
   },
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/setupTests.ts'],
   coverageDirectory: 'coverage',
+  clearMocks: true,
   collectCoverageFrom: [
     'src/**/*.{ts,tsx}',
     '!src/**/*.d.ts',
     '!src/__tests__/**',
     '!src/main.tsx',
     '!src/vite-env.d.ts',
+    // shadcn/Radix UI primitives are vendored, generated wrappers — unit-testing
+    // them directly is low value, and their partial coverage dragged the app-logic
+    // floor down and pressured shallow tests. Their real behavior is exercised
+    // transitively by the components/pages that use them.
+    '!src/components/ui/**',
   ],
   // Ratchet just below current coverage so it can only go up. NB: Jest's "global"
   // floor applies only to files NOT matched by the services/ key below, so it measures
-  // components/pages/etc. (services is carved out at a much higher floor). A few points
-  // of buffer keeps a tiny change from flaking the gate. The per-directory floor
-  // protects the security-sensitive services/ layer (env tenant/HTTPS allow-listing,
-  // the MSAL bearer-token + 401-reauth interceptors) from regressing. Raise over time.
-  // Last calibrated against actual: whole-suite ~65%, services ~92%.
+  // components/pages/lib/queries/etc. (services is carved out at a much higher floor,
+  // and ui/** is excluded from collection entirely). A few points of buffer keeps a
+  // tiny change from flaking the gate. The per-directory floor protects the
+  // security-sensitive services/ layer (env tenant/HTTPS allow-listing, the MSAL
+  // bearer-token + 401-reauth interceptors) from regressing. Raise over time.
+  // Last calibrated against actual: global bucket ~94.7/87.7/91.5/96.6, services
+  // ~98.4/97.3/97.4/98.9. Re-ratchet whenever actual climbs 3+ points above the floor.
   coverageThreshold: {
-    global: { statements: 59, branches: 49, functions: 52, lines: 61 },
-    './src/services/': { statements: 90, branches: 90, functions: 92, lines: 90 },
+    global: { statements: 90, branches: 82, functions: 86, lines: 92 },
+    './src/services/': { statements: 95, branches: 94, functions: 95, lines: 96 },
   },
 };
 

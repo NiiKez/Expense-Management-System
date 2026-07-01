@@ -8,9 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "jest --config jest.config.cjs --detectOpenHandles",
+    "test": "jest --config jest.config.cjs",
     "test:watch": "jest --config jest.config.cjs --watch",
-    "test:coverage": "jest --config jest.config.cjs --coverage --detectOpenHandles"
+    "test:coverage": "jest --config jest.config.cjs --coverage",
+    "test:debug": "jest --config jest.config.cjs --detectOpenHandles"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.6.2",

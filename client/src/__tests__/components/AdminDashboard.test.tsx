@@ -79,4 +79,56 @@ describe('AdminDashboard', () => {
     expect(screen.getByText('Office Supplies')).toBeInTheDocument()
     expect(screen.getByText('Software License')).toBeInTheDocument()
   })
+
+  it('renders skeleton placeholders while the queries are pending', () => {
+    mockedGet.mockReset()
+    mockedGet.mockReturnValue(new Promise(() => {})) // never resolves → stays pending
+
+    const { container } = renderWithProviders(<AdminDashboard />)
+
+    // The stat + list skeletons render; the resolved happy content does not yet.
+    expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Active users')).not.toBeInTheDocument()
+  })
+
+  it('shows the "Could not load stats" empty state when the stats query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/admin/stats') return Promise.reject(new Error('boom'))
+      // Keep the list happy so we isolate the stats failure.
+      return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 5 } } })
+    })
+
+    renderWithProviders(<AdminDashboard />)
+
+    expect(await screen.findByText('Could not load stats')).toBeInTheDocument()
+  })
+
+  it('shows the list error empty state when the recent-expenses query errors', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/admin/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/admin/expenses') return Promise.reject(new Error('boom'))
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<AdminDashboard />)
+
+    expect(await screen.findByText('Could not load recent expenses')).toBeInTheDocument()
+  })
+
+  it('shows the empty-list state when there are no recent expenses', async () => {
+    mockedGet.mockReset()
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/admin/stats') return Promise.resolve({ data: { success: true, data: stats } })
+      if (url === '/admin/expenses') {
+        return Promise.resolve({ data: { success: true, data: [], pagination: { total: 0, page: 1, pageSize: 5 } } })
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`))
+    })
+
+    renderWithProviders(<AdminDashboard />)
+
+    expect(await screen.findByText('No recent expenses')).toBeInTheDocument()
+  })
 })

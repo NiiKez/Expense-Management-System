@@ -1,5 +1,6 @@
 import React from 'react'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import Sidebar from '../../components/layout/Sidebar'
 import { Role } from '../../types'
@@ -81,5 +82,79 @@ describe('Sidebar navigation', () => {
     renderSidebar()
 
     expect(screen.queryByTestId('theme-toggle')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar role-based nav', () => {
+  it('shows the employee-only "New expense" entry and hides privileged links', () => {
+    renderSidebar(Role.EMPLOYEE)
+
+    expect(screen.getByTestId('nav-file-entry')).toHaveAttribute('href', '/expenses/new')
+    expect(screen.queryByTestId('nav-approvals')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-org-chart')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-reports')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-registry')).not.toBeInTheDocument()
+  })
+
+  it('shows approvals/org-chart/team for a MANAGER and hides admin + file entry', () => {
+    renderSidebar(Role.MANAGER)
+
+    expect(screen.getByTestId('nav-approvals')).toHaveAttribute('href', '/approvals')
+    expect(screen.getByTestId('nav-org-chart')).toHaveAttribute('href', '/org-chart')
+    expect(screen.getByTestId('nav-reports')).toHaveAttribute('href', '/manager/employees')
+    expect(screen.queryByTestId('nav-registry')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-file-entry')).not.toBeInTheDocument()
+  })
+
+  it('shows the admin registry for an ADMIN and hides the manager-only Team link', () => {
+    renderSidebar(Role.ADMIN)
+
+    expect(screen.getByTestId('nav-registry')).toHaveAttribute('href', '/admin')
+    expect(screen.getByTestId('nav-approvals')).toBeInTheDocument()
+    expect(screen.getByTestId('nav-org-chart')).toBeInTheDocument()
+    expect(screen.queryByTestId('nav-file-entry')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-reports')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar footer', () => {
+  it('calls logout when Sign out is clicked', async () => {
+    const logout = jest.fn()
+    mockUseAuth.mockReturnValue({
+      user: makeUser(Role.EMPLOYEE),
+      isAuthenticated: true,
+      isLoading: false,
+      login: jest.fn(),
+      logout,
+      switchRole: jest.fn(),
+    })
+
+    render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    )
+
+    await userEvent.click(screen.getByTestId('nav-signout'))
+    expect(logout).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders nothing when there is no authenticated user', () => {
+    mockUseAuth.mockReturnValue({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+      login: jest.fn(),
+      logout: jest.fn(),
+      switchRole: jest.fn(),
+    })
+
+    const { container } = render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    )
+
+    expect(container).toBeEmptyDOMElement()
   })
 })

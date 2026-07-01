@@ -26,7 +26,8 @@ if (typeof globalThis.structuredClone === 'undefined') {
 }
 
 // jsdom does not implement window.matchMedia — mock it so components that
-// call matchMedia (e.g. responsive hooks, MUI) don't throw.
+// call matchMedia (e.g. responsive hooks, MUI) don't throw. Defaults to the
+// desktop match; see __tests__/helpers/matchMedia.ts to force the mobile branch.
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({
@@ -39,4 +40,41 @@ Object.defineProperty(window, 'matchMedia', {
     removeEventListener: jest.fn(),
     dispatchEvent: jest.fn(),
   }),
+});
+
+// Fail a test if it logs an unexpected console.error / console.warn. React's
+// act() warnings, "can't update state on an unmounted component", invalid-prop
+// and missing-key warnings are the single most common signal of a real
+// async/effect bug — without this guard they print to the console and are
+// silently ignored, so a test can "pass" while leaking them. A test that
+// LEGITIMATELY expects a warning must assert it by installing its own
+// `jest.spyOn(console, 'error').mockImplementation(...)`; those calls go to the
+// test's own spy and never reach the guard below.
+const IGNORED_CONSOLE: RegExp[] = [
+  // jsdom logs this whenever window.location.assign()/navigation is exercised
+  // (the demo-session 401 → /login redirect tests deliberately trigger it).
+  /Not implemented: navigation/,
+];
+
+let consoleErrorSpy: jest.SpyInstance;
+let consoleWarnSpy: jest.SpyInstance;
+
+beforeEach(() => {
+  consoleErrorSpy = jest.spyOn(console, 'error');
+  consoleWarnSpy = jest.spyOn(console, 'warn');
+});
+
+afterEach(() => {
+  const offenders = [...consoleErrorSpy.mock.calls, ...consoleWarnSpy.mock.calls].filter(
+    (args) => !IGNORED_CONSOLE.some((re) => re.test(String(args[0]))),
+  );
+  consoleErrorSpy.mockRestore();
+  consoleWarnSpy.mockRestore();
+  if (offenders.length > 0) {
+    throw new Error(
+      `Test logged ${offenders.length} unexpected console.error/warn call(s). ` +
+        `If expected, spy on console in the test to assert it:\n` +
+        offenders.map((a) => '  • ' + String(a[0])).join('\n'),
+    );
+  }
 });

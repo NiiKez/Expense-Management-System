@@ -117,3 +117,72 @@ describe('Approvals', () => {
     await waitFor(() => expect(screen.queryByText('Team Lunch')).not.toBeInTheDocument())
   })
 })
+
+describe('Approvals states', () => {
+  it('shows the "all caught up" empty state with the team blurb', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: [],
+        pagination: { total: 0, page: 1, pageSize: 20 },
+      },
+    })
+
+    renderWithProviders(<Approvals />)
+
+    expect(await screen.findByText('All caught up')).toBeInTheDocument()
+    expect(screen.getByText('No pending expenses from your team.')).toBeInTheDocument()
+  })
+
+  it('uses the direct-reports blurb when the queue source is Graph', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: [],
+        pagination: { total: 0, page: 1, pageSize: 20 },
+        meta: { source: 'graph' },
+      },
+    })
+
+    renderWithProviders(<Approvals />)
+
+    expect(
+      await screen.findByText('No pending expenses from your direct reports.'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the error banner when the pending query fails', async () => {
+    mockedApi.get.mockRejectedValue(new Error('boom'))
+
+    renderWithProviders(<Approvals />)
+
+    expect(await screen.findByText('Failed to load pending approvals.')).toBeInTheDocument()
+  })
+})
+
+describe('Approvals pagination', () => {
+  it('disables Previous on page 1 and advances the query to page 2 via Next', async () => {
+    const user = userEvent.setup()
+    // total > pageSize → the pagination controls render (totalPages = 3 here).
+    mockedApi.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: [mockExpense({ id: 1, title: 'Team Lunch' })],
+        pagination: { total: 60, page: 1, pageSize: 20 },
+      },
+    })
+
+    renderWithProviders(<Approvals />)
+
+    await screen.findByText('Team Lunch')
+    expect(screen.getByTestId('approvals-pagination-prev')).toBeDisabled()
+
+    await user.click(screen.getByTestId('approvals-pagination-next'))
+
+    await waitFor(() =>
+      expect(mockedApi.get).toHaveBeenCalledWith('/approvals/pending', {
+        params: { page: 2, pageSize: 20 },
+      }),
+    )
+  })
+})
