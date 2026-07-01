@@ -3,7 +3,7 @@ import pool from '../config/db';
 import { User, Role, UserGroup } from '../types';
 import { cacheService } from '../services/cacheService';
 import logger from '../config/logger';
-import { MAX_USER_LIST } from '../utils/constants';
+import { MAX_USER_LIST, MAX_ORG_NODES } from '../utils/constants';
 
 // Explicit column list for list endpoints — avoids SELECT * dragging the
 // in-app preference columns (default_currency, notify_*) into admin views that
@@ -11,8 +11,60 @@ import { MAX_USER_LIST } from '../utils/constants';
 const USER_LIST_COLUMNS =
   'id, entra_id, email, display_name, role, manager_id, is_active, created_at, updated_at';
 
+// Columns the org-tree endpoint returns per node: only what the chart renders
+// (name, role, job_title, department, active state), plus manager_id (the edge
+// the client threads the tree from) and updated_at (freshness floor). Data
+// minimization: entra_id/email/employee_id/office_location are PII the chart
+// never displays, so they are deliberately NOT shipped to the browser.
+const ORG_NODE_COLUMNS =
+  'id, display_name, role, department, job_title, manager_id, is_active, updated_at';
+
 interface UserRow extends RowDataPacket, User {}
 interface UserGroupRow extends RowDataPacket, UserGroup {}
+
+// One org-tree node row. Narrower than UserRow (only the org-node columns), plus
+// `depth` from the recursive CTE. is_demo is number-or-boolean at runtime, so
+// callers coerce is_active with Boolean() before serializing.
+interface OrgNodeRow
+  extends RowDataPacket,
+    Pick<
+      User,
+      | 'id'
+      | 'display_name'
+      | 'role'
+      | 'manager_id'
+      | 'is_active'
+      | 'department'
+      | 'job_title'
+    > {
+  updated_at: Date;
+  depth?: number;
+}
+
+// Org-tree model reads return the capped node set plus whether the cap actually
+// clipped it, so the caller reports `truncated` from a precise signal rather
+// than guessing from the row count (which can't tell an exact-fit from a clip).
+interface OrgNodeResult {
+  nodes: OrgNodeRow[];
+  truncated: boolean;
+}
+
+// One user's fuller record for the org-chart detail modal: the org fields plus
+// the contact PII the tree withholds (email/employee_id/office_location) and
+// entra_id — the last needed only server-side to call Graph, never serialized.
+interface OrgUserDetailRow extends RowDataPacket {
+  id: number;
+  entra_id: string;
+  display_name: string;
+  email: string;
+  role: Role;
+  job_title: string | null;
+  department: string | null;
+  employee_id: string | null;
+  office_location: string | null;
+  manager_id: number | null;
+  is_active: boolean | number;
+}
 
 // Microsoft Graph org attributes that sync onto the users row. A fixed allowlist
 // of column names (never user-controlled) so the dynamic UPDATE is injection-safe.
@@ -68,6 +120,132 @@ export const userModel = {
       [managerId],
     );
     return rows;
+  },
+
+  // The whole org graph as flat nodes, for the ADMIN org-tree view. Mirrors
+  // findAll's demo scoping and defensive cap: a real admin sees only real rows
+  // (is_demo = FALSE); a demo admin sees only its own workspace. Bounded by
+  // MAX_ORG_NODES and logged if the cap clips the result, so it is never silent.
+  async getAllOrgNodes(demoSessionId?: string): Promise<OrgNodeResult> {
+    const where = demoSessionId
+      ? 'WHERE is_demo = TRUE AND demo_session_id = ?'
+      : 'WHERE is_demo = FALSE';
+    const params: (string | number)[] = demoSessionId
+      ? [demoSessionId, MAX_ORG_NODES + 1]
+      : [MAX_ORG_NODES + 1];
+    const [rows] = await pool.query<OrgNodeRow[]>(
+      `SELECT ${ORG_NODE_COLUMNS} FROM users ${where} ORDER BY display_name ASC LIMIT ?`,
+      params,
+    );
+    // Over-fetched one past the cap, so a full extra row means real truncation.
+    if (rows.length > MAX_ORG_NODES) {
+      logger.warn('Org node list hit the MAX_ORG_NODES cap; result truncated', { cap: MAX_ORG_NODES });
+      return { nodes: rows.slice(0, MAX_ORG_NODES), truncated: true };
+    }
+    return { nodes: rows, truncated: false };
+  },
+
+  // The subtree rooted at one user (their transitive reports), for the MANAGER
+  // org-tree view. Walks DOWN users.manager_id via a recursive CTE. The scope
+  // clause STRUCTURE is fixed/non-user-controlled and interpolated identically
+  // into the anchor and recursive members; only the `?` placeholder carries the
+  // demo_session_id. The depth cap and LIMIT bound the walk and guard against a
+  // cycle in cached manager_id data.
+  async getOrgSubtree(
+    rootId: number,
+    maxDepth: number,
+    demoSessionId?: string,
+  ): Promise<OrgNodeResult> {
+    const scopeClause = demoSessionId
+      ? 'u.is_demo = TRUE AND u.demo_session_id = ?'
+      : 'u.is_demo = FALSE';
+    const scopeParams: string[] = demoSessionId ? [demoSessionId] : [];
+
+    const [rows] = await pool.query<OrgNodeRow[]>(
+      `WITH RECURSIVE subtree AS (
+         SELECT u.id, u.display_name, u.role, u.department, u.job_title,
+                u.manager_id, u.is_active, u.updated_at, 0 AS depth
+         FROM users u
+         WHERE u.id = ? AND ${scopeClause}
+         UNION ALL
+         SELECT u.id, u.display_name, u.role, u.department, u.job_title,
+                u.manager_id, u.is_active, u.updated_at, s.depth + 1
+         FROM users u
+         JOIN subtree s ON u.manager_id = s.id
+         WHERE s.depth < ? AND ${scopeClause}
+       )
+       SELECT id, display_name, role, department, job_title, manager_id,
+              is_active, updated_at, depth
+       FROM subtree
+       LIMIT ?`,
+      [rootId, ...scopeParams, maxDepth, ...scopeParams, MAX_ORG_NODES + 1],
+    );
+    // A cycle in cached manager_id data (A→B→A) makes UNION ALL re-emit a node
+    // once per depth level; dedupe by id FIRST (shallowest occurrence wins) so
+    // re-emitted rows can neither reach the client nor inflate the count below.
+    const byId = new Map<number, OrgNodeRow>();
+    for (const row of rows) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    const unique = [...byId.values()];
+    // Over-fetched one past the cap, so more than MAX_ORG_NODES *distinct* nodes
+    // means a real clip. Measuring after dedup keeps a cycle from spuriously
+    // tripping the cap (and logging a false "truncated") on a small subtree.
+    const truncated = unique.length > MAX_ORG_NODES;
+    if (truncated) {
+      logger.warn('Org subtree hit the MAX_ORG_NODES cap; result truncated', { cap: MAX_ORG_NODES });
+    }
+    return { nodes: truncated ? unique.slice(0, MAX_ORG_NODES) : unique, truncated };
+  },
+
+  // One user by id for the org-chart detail modal, scoped EXACTLY like the tree
+  // reads: a demo caller sees only their own workspace, a real caller only real
+  // rows. Returns null when the id is absent or out of scope, so the caller
+  // reports 404 rather than leaking a row's existence across the demo boundary.
+  async findOrgUser(id: number, demoSessionId?: string): Promise<OrgUserDetailRow | null> {
+    const where = demoSessionId
+      ? 'WHERE id = ? AND is_demo = TRUE AND demo_session_id = ?'
+      : 'WHERE id = ? AND is_demo = FALSE';
+    const params: (string | number)[] = demoSessionId ? [id, demoSessionId] : [id];
+    const [rows] = await pool.query<OrgUserDetailRow[]>(
+      `SELECT id, entra_id, display_name, email, role, job_title, department,
+              employee_id, office_location, manager_id, is_active
+       FROM users ${where} LIMIT 1`,
+      params,
+    );
+    return rows[0] ?? null;
+  },
+
+  // Authorization check for a MANAGER opening another node's detail: whether
+  // `targetId` is `rootId` itself or one of its transitive reports. Walks DOWN
+  // manager_id with the same bounded, demo-scoped recursive CTE as getOrgSubtree,
+  // but stops at the first match. Never trusts a client-supplied id.
+  async isInSubtree(
+    rootId: number,
+    targetId: number,
+    maxDepth: number,
+    demoSessionId?: string,
+  ): Promise<boolean> {
+    if (rootId === targetId) return true;
+    const scopeClause = demoSessionId
+      ? 'u.is_demo = TRUE AND u.demo_session_id = ?'
+      : 'u.is_demo = FALSE';
+    const scopeParams: string[] = demoSessionId ? [demoSessionId] : [];
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `WITH RECURSIVE subtree AS (
+         SELECT u.id, 0 AS depth
+         FROM users u
+         WHERE u.id = ? AND ${scopeClause}
+         UNION ALL
+         SELECT u.id, s.depth + 1
+         FROM users u
+         JOIN subtree s ON u.manager_id = s.id
+         WHERE s.depth < ? AND ${scopeClause}
+       )
+       SELECT id FROM subtree WHERE id = ? LIMIT 1`,
+      [rootId, ...scopeParams, maxDepth, ...scopeParams, targetId],
+    );
+    return rows.length > 0;
   },
 
   async findByEntraIds(entraIds: string[]): Promise<User[]> {

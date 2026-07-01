@@ -5,7 +5,7 @@
 A full-stack expense management system: employees submit expenses, managers approve or reject them, and admins have organisation-wide oversight. Authentication is delegated to Microsoft Entra ID; the manager hierarchy is sourced from Microsoft Graph.
 
 - **Backend** — Express 4 + TypeScript, MySQL 8, Entra ID JWT auth (`jwks-rsa`), Zod validation, structured Winston JSON logs with secret redaction, Prometheus metrics on a separate internal listener.
-- **Frontend** — React 19 + TypeScript + Vite 8, Tailwind CSS v4 + shadcn/ui (Radix) with a dark-by-default theme, Recharts dashboards, MSAL (PKCE), a production-safe public **demo** session, **or** a localhost-only stub-auth path, React Router, TanStack Query for server-state/data fetching, Axios with a token interceptor, react-hook-form + Zod, sonner toasts.
+- **Frontend** — React 19 + TypeScript + Vite 8, Tailwind CSS v4 + shadcn/ui (Radix) with a dark-by-default theme, Recharts dashboards, a React Flow org chart, MSAL (PKCE), a production-safe public **demo** session, **or** a localhost-only stub-auth path, React Router, TanStack Query for server-state/data fetching, Axios with a token interceptor, react-hook-form + Zod, sonner toasts.
 - **Database** — MySQL with optimistic concurrency on `expenses.version`, append-only `audit_logs`, soft delete on expenses.
 - **Observability** — Prometheus + Grafana + Loki + Promtail, all wired in Docker Compose.
 - **Tests** — Jest (server unit + integration against a real MySQL container), a lighter Jest + React Testing Library suite on the client, and Playwright e2e against a stub-auth dev server.
@@ -66,7 +66,7 @@ Each workspace (`server/`, `client/`, `e2e/`) has its own `package.json` and is 
 The same build serves three audiences, all gated by env:
 
 - **Owner only (production):** restrict sign-in to a single user — assign the Entra app role to just that account and/or set `OWNER_OIDS` (comma-separated Entra object ids) on the API. Anyone else is rejected with 403.
-- **Public demo:** set `ENABLE_DEMO=true` + `DEMO_JWT_SECRET=<random>` (API) and `VITE_ENABLE_DEMO=true` (client). Visitors pick a persona (admin / manager / employee) and launch an isolated, seeded sandbox — its own admin, manager, two employees, and sample expenses — via a server-signed session token, then exercise the full submit/approve/reject flow without ever touching real data. Workspaces auto-expire (`DEMO_SESSION_TTL_SECONDS`, default 2h), are reaped on a timer (every 15 min), and are capped by `DEMO_MAX_ACTIVE` (default 50; further launches get a `503` until one expires). This path is entirely separate from dev stub auth.
+- **Public demo:** set `ENABLE_DEMO=true` + `DEMO_JWT_SECRET=<random>` (API) and `VITE_ENABLE_DEMO=true` (client). Visitors pick a persona (admin / manager / employee) and launch an isolated, seeded sandbox — a small multi-level, multi-department org (an admin, managers, and their reports-of-reports) with sample expenses — via a server-signed session token, then exercise the full submit/approve/reject flow without ever touching real data. Workspaces auto-expire (`DEMO_SESSION_TTL_SECONDS`, default 2h), are reaped on a timer (every 15 min), and are capped by `DEMO_MAX_ACTIVE` (default 50; further launches get a `503` until one expires). This path is entirely separate from dev stub auth.
 
 ### Single-image deploy
 
@@ -153,7 +153,7 @@ In stub mode (`VITE_AUTH_MODE=stub`, localhost only) the login page lists the se
 - **Proxying** — `TRUST_PROXY_HOPS` (set to the exact number of proxies in front of the API; using `true` would let any client spoof `X-Forwarded-For`). `TRUST_PROXY=true` is a coarse fallback (one hop) when the hop count is unset.
 - **Rate limits** (per 15 min unless noted) — `API_RATE_LIMIT_MAX` (1000), `STRICT_RATE_LIMIT_MAX` (100, applied to `/approvals` and `/admin`), `UPLOAD_RATE_LIMIT_MAX` (20, per-user on `POST /expenses`), `DEMO_RATE_LIMIT_MAX` (10, per-IP on `POST /auth/demo-login`), `HEALTH_RATE_LIMIT_MAX` (60/min)
 - **Entra ID** — `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` (optional, Graph OBO only), `ENTRA_TOKEN_AUDIENCE` (optional override of accepted audiences; defaults to `api://{clientId}` and `{clientId}`)
-- **Microsoft Graph** (manager hierarchy, org profile attributes and group memberships via OBO; requires the delegated permissions `User.Read.All` and `GroupMember.Read.All`) — `GRAPH_TIMEOUT_MS` (per-call timeout, default 10000); `GRAPH_RETRY_ATTEMPTS` (3) / `GRAPH_RETRY_BASE_MS` (250) / `GRAPH_RETRY_MAX_DELAY_MS` (4000) tune the throttling-aware retry that honours `Retry-After` on 429/5xx; `GRAPH_MAX_PAGES` (50) caps direct-report pagination, `GRAPH_MAX_GROUP_PAGES` (20) caps group-membership pagination, `GRAPH_MAX_CHAIN_DEPTH` (10) bounds the reporting-line walk
+- **Microsoft Graph** (manager hierarchy, org profile attributes, group memberships, and per-user org-chart detail via OBO; requires the delegated permissions `User.Read.All` and `GroupMember.Read.All`) — `GRAPH_TIMEOUT_MS` (per-call timeout, default 10000); `GRAPH_RETRY_ATTEMPTS` (3) / `GRAPH_RETRY_BASE_MS` (250) / `GRAPH_RETRY_MAX_DELAY_MS` (4000) tune the throttling-aware retry that honours `Retry-After` on 429/5xx; `GRAPH_MAX_PAGES` (50) caps direct-report pagination, `GRAPH_MAX_GROUP_PAGES` (20) caps group-membership pagination, `GRAPH_MAX_CHAIN_DEPTH` (10) bounds the reporting-line walk
 - **Stub auth** — `ALLOW_STUB_AUTH=true` enables a loopback-only test login path used by Playwright (also requires `NODE_ENV=development`). The server refuses to boot if this is set outside development. Never set it in production.
 - **Compose** — `MYSQL_ROOT_PASSWORD`, `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, `APP_BIND_HOST`, `PROMETHEUS_PORT`, `GRAFANA_PORT`, `COMPOSE_PROJECT_NAME`
 
@@ -212,6 +212,8 @@ All routes live under `/api/v1/`:
 | `PATCH /approvals/:id/reject`               | MANAGER/ADMIN | Requires `reason` in the request body                          |
 | `GET  /manager/employees`                   | MANAGER       | Direct-report directory (Graph-backed)                         |
 | `GET  /manager/stats`                       | MANAGER       | Team rollup aggregates                                         |
+| `GET  /org/tree`                            | MANAGER/ADMIN | Reporting hierarchy — a manager's own subtree or the whole org (admin); depth-bounded + node-capped |
+| `GET  /org/users/:id`                       | MANAGER/ADMIN | Org-chart node detail; Graph-enriched for real sessions, per-node visibility re-checked server-side |
 | `GET  /admin/expenses`                      | ADMIN         | Org-wide ledger with filters, sort, pagination                 |
 | `GET  /admin/expenses/export`               | ADMIN         | CSV of the filtered org ledger                                 |
 | `GET  /admin/users`                         | ADMIN         |                                                                |

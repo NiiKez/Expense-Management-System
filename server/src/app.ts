@@ -15,6 +15,7 @@ import adminRoutes from './routes/admin';
 import healthRoutes from './routes/health';
 import meRoutes from './routes/me';
 import managerRoutes from './routes/manager';
+import orgRoutes from './routes/org';
 import notificationRoutes from './routes/notifications';
 import authRoutes from './routes/auth';
 
@@ -197,6 +198,10 @@ app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/expenses', expenseRoutes);
 app.use('/api/v1/approvals', strictLimiter, approvalRoutes);
 app.use('/api/v1/manager', managerRoutes);
+// The org-tree read is comparatively heavy (a full-org list or a recursive
+// manager_id walk, both capped at MAX_ORG_NODES), so put it on the same tight
+// budget as the other privileged surfaces rather than only the general limiter.
+app.use('/api/v1/org', strictLimiter, orgRoutes);
 app.use('/api/v1/admin', strictLimiter, adminRoutes);
 
 // Unmatched API routes always return a JSON 404 — never the SPA shell. apiLimiter

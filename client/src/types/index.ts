@@ -211,6 +211,52 @@ export interface MyDirectory {
   groups: { id: string; name: string | null }[];
 }
 
+// One node of the org reporting hierarchy (GET /org/tree). The client threads
+// the tree from managerId — an edge runs managerId → id when both ends are in
+// the returned set; a node whose managerId is null or absent from the set is a
+// (forest) root. Only fields the chart renders are returned; identity PII
+// (entraId/email/employeeId/officeLocation) is intentionally not exposed.
+export interface OrgTreeNode {
+  id: number;
+  displayName: string;
+  role: Role;
+  jobTitle: string | null;
+  department: string | null;
+  managerId: number | null;
+  isActive: boolean;
+}
+
+// GET /org/tree — the reporting hierarchy as a flat node list. ADMIN sees the
+// whole org; MANAGER sees the subtree rooted at themselves. syncedAt is the
+// freshness floor (oldest cached updated_at); truncated flags a capped result.
+export interface OrgTree {
+  scope: 'ADMIN' | 'MANAGER';
+  rootIds: number[];
+  truncated: boolean;
+  syncedAt: string | null;
+  nodes: OrgTreeNode[];
+}
+
+// GET /org/users/:id — the detail behind a single org-chart node. `source` is
+// 'directory' when the contact fields + groups were enriched live from Microsoft
+// Graph, or 'local' when only the cached DB row was available (demo/stub sessions,
+// or a Graph call that failed) — the modal badges the difference.
+export interface OrgUserDetail {
+  id: number;
+  displayName: string;
+  role: Role;
+  jobTitle: string | null;
+  department: string | null;
+  email: string | null;
+  officeLocation: string | null;
+  employeeId: string | null;
+  mobilePhone: string | null;
+  businessPhones: string[];
+  isActive: boolean;
+  groups: { id: string; name: string | null }[];
+  source: 'directory' | 'local';
+}
+
 export interface CategoryTotal { category: Category; count: number; total: number }
 export interface MonthlyTotal { month: string; total: number }
 export interface MeStats {

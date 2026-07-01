@@ -36,6 +36,10 @@ async function insertDemoUser(
     emailLocal: string;
     role: Role;
     managerId: number | null;
+    jobTitle: string | null;
+    department: string | null;
+    officeLocation: string | null;
+    employeeId: string | null;
     sessionId: string;
     ttlSeconds: number;
   },
@@ -49,9 +53,9 @@ async function insertDemoUser(
   const email = `${params.emailLocal}.${params.sessionId}@demo.local`;
   const [result] = await conn.execute<ResultSetHeader>(
     `INSERT INTO users
-       (entra_id, email, display_name, role, manager_id, is_demo, demo_expires_at, demo_session_id)
-     VALUES (?, ?, ?, ?, ?, TRUE, DATE_ADD(NOW(), INTERVAL ? SECOND), ?)`,
-    [entraId, email, params.displayName, params.role, params.managerId, params.ttlSeconds, params.sessionId],
+       (entra_id, email, display_name, role, manager_id, job_title, department, office_location, employee_id, is_demo, demo_expires_at, demo_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, DATE_ADD(NOW(), INTERVAL ? SECOND), ?)`,
+    [entraId, email, params.displayName, params.role, params.managerId, params.jobTitle, params.department, params.officeLocation, params.employeeId, params.ttlSeconds, params.sessionId],
   );
   return result.insertId;
 }
@@ -119,13 +123,16 @@ function buildSeedExpenses(managerId: number, emp1Id: number, emp2Id: number): S
 }
 
 /**
- * Create a fresh, fully isolated demo workspace: an admin, a manager (with two
- * direct reports) and a realistic spread of seeded expenses. All four users are
- * tied by the same demo_session_id, flagged is_demo and stamped with an expiry,
- * then reaped after the TTL.
+ * Create a fresh, fully isolated demo workspace: a small but multi-level org — an
+ * admin over an Engineering and a Sales branch (nine users, deep enough to show
+ * reports-of-reports in the org chart) — plus a realistic spread of seeded
+ * expenses for the manager persona's own team. Every user is tied by the same
+ * demo_session_id, flagged is_demo and stamped with an expiry, then reaped after
+ * the TTL.
  *
  * Returns the per-role user ids so the caller can mint a demo session token for
- * whichever role the visitor picked on the login page.
+ * whichever role the visitor picked on the login page (EMPLOYEE resolves to
+ * Jordan Lee, one of the manager's direct reports).
  */
 export async function createDemoWorkspace(): Promise<DemoWorkspace> {
   const sessionId = randomUUID();
@@ -135,41 +142,82 @@ export async function createDemoWorkspace(): Promise<DemoWorkspace> {
   try {
     await conn.beginTransaction();
 
-    const adminId = await insertDemoUser(conn, {
-      displayName: 'Demo Admin',
-      emailLocal: 'demo.admin',
-      role: Role.ADMIN,
-      managerId: null,
-      sessionId,
-      ttlSeconds,
-    });
-    const managerId = await insertDemoUser(conn, {
-      displayName: 'Demo User',
-      emailLocal: 'demo.user',
-      role: Role.MANAGER,
-      managerId: null,
-      sessionId,
-      ttlSeconds,
-    });
-    const emp1Id = await insertDemoUser(conn, {
-      displayName: 'Jordan Lee',
-      emailLocal: 'jordan.lee',
-      role: Role.EMPLOYEE,
-      managerId,
-      sessionId,
-      ttlSeconds,
-    });
-    const emp2Id = await insertDemoUser(conn, {
-      displayName: 'Sam Carter',
-      emailLocal: 'sam.carter',
-      role: Role.EMPLOYEE,
-      managerId,
-      sessionId,
-      ttlSeconds,
+    // One helper so every seeded row inherits this workspace's sessionId + TTL and
+    // a sequential employee id (E-0001…), giving the org-chart detail modal
+    // populated office/employee-id fields even in the demo (no live Graph there).
+    let empSeq = 0;
+    const seed = (u: {
+      displayName: string;
+      emailLocal: string;
+      role: Role;
+      managerId: number | null;
+      jobTitle: string;
+      department: string;
+      officeLocation: string;
+    }) =>
+      insertDemoUser(conn, {
+        ...u,
+        employeeId: `E-${String(++empSeq).padStart(4, '0')}`,
+        sessionId,
+        ttlSeconds,
+      });
+
+    // Head of the org.
+    const adminId = await seed({
+      displayName: 'Demo Admin', emailLocal: 'demo.admin', role: Role.ADMIN,
+      managerId: null, jobTitle: 'Chief Executive Officer', department: 'Executive',
+      officeLocation: 'San Francisco (HQ)',
     });
 
-    for (const seed of buildSeedExpenses(managerId, emp1Id, emp2Id)) {
-      await insertDemoExpense(conn, seed, managerId);
+    // Engineering branch. Demo User is the MANAGER login persona; Jordan Lee and
+    // Sam Carter are the DIRECT reports whose expenses fill the approval queue.
+    // Ravi (a lead) with Ana under him add a reports-of-reports level.
+    const managerId = await seed({
+      displayName: 'Demo User', emailLocal: 'demo.user', role: Role.MANAGER,
+      managerId: adminId, jobTitle: 'Engineering Manager', department: 'Engineering',
+      officeLocation: 'San Francisco',
+    });
+    const emp1Id = await seed({
+      displayName: 'Jordan Lee', emailLocal: 'jordan.lee', role: Role.EMPLOYEE,
+      managerId, jobTitle: 'Software Engineer', department: 'Engineering',
+      officeLocation: 'San Francisco',
+    });
+    const emp2Id = await seed({
+      displayName: 'Sam Carter', emailLocal: 'sam.carter', role: Role.EMPLOYEE,
+      managerId, jobTitle: 'Software Engineer', department: 'Engineering',
+      officeLocation: 'Remote',
+    });
+    const leadId = await seed({
+      displayName: 'Ravi Shah', emailLocal: 'ravi.shah', role: Role.MANAGER,
+      managerId, jobTitle: 'Engineering Lead', department: 'Engineering',
+      officeLocation: 'Austin',
+    });
+    await seed({
+      displayName: 'Ana Torres', emailLocal: 'ana.torres', role: Role.EMPLOYEE,
+      managerId: leadId, jobTitle: 'Product Designer', department: 'Engineering',
+      officeLocation: 'Austin',
+    });
+
+    // Sales branch — a second department and depth, so the ADMIN org chart shows a
+    // real multi-team tree rather than a single line.
+    const salesManagerId = await seed({
+      displayName: 'Priya Nair', emailLocal: 'priya.nair', role: Role.MANAGER,
+      managerId: adminId, jobTitle: 'Head of Sales', department: 'Sales',
+      officeLocation: 'New York',
+    });
+    await seed({
+      displayName: 'Diego Alvarez', emailLocal: 'diego.alvarez', role: Role.EMPLOYEE,
+      managerId: salesManagerId, jobTitle: 'Account Executive', department: 'Sales',
+      officeLocation: 'New York',
+    });
+    await seed({
+      displayName: 'Mei Lin', emailLocal: 'mei.lin', role: Role.EMPLOYEE,
+      managerId: salesManagerId, jobTitle: 'Account Executive', department: 'Sales',
+      officeLocation: 'Chicago',
+    });
+
+    for (const expense of buildSeedExpenses(managerId, emp1Id, emp2Id)) {
+      await insertDemoExpense(conn, expense, managerId);
     }
 
     await conn.commit();

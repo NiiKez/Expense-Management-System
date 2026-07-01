@@ -23,6 +23,12 @@ export const EXPORT_MAX_ROWS = 5000;
 // the truncation is never silent.
 export const MAX_USER_LIST = 10_000;
 
+// Max depth walked when expanding a manager's org subtree (recursive CTE guard).
+export const ORG_TREE_MAX_DEPTH = 10;
+// Defensive ceiling on nodes returned by the org-tree endpoint (bounds the graph
+// the client must render). Hitting it is logged so truncation is never silent.
+export const MAX_ORG_NODES = 5000;
+
 // Currency
 export const DEFAULT_CURRENCY = 'USD';
 

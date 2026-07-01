@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
 import ProtectedRoute from './components/common/ProtectedRoute';
@@ -9,6 +10,10 @@ import Approvals from './pages/Approvals';
 import Admin from './pages/Admin';
 import ManagerEmployees from './pages/ManagerEmployees';
 import Settings from './pages/Settings';
+
+// Code-split the org chart: it pulls in React Flow + dagre (~150 kB), and only
+// managers/admins ever open it, so keep that weight out of the initial bundle.
+const OrgChart = lazy(() => import('./pages/OrgChart'));
 import ExpenseDetail from './components/expenses/ExpenseDetail';
 import EditExpense from './pages/EditExpense';
 import { Role } from './types';
@@ -99,6 +104,24 @@ function App() {
           <ProtectedRoute requiredRole={Role.MANAGER}>
             <AppShell title="Team">
               <ManagerEmployees />
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/org-chart"
+        element={
+          <ProtectedRoute requiredRole={[Role.MANAGER, Role.ADMIN]}>
+            <AppShell title="Org Chart">
+              <Suspense
+                fallback={
+                  <div role="status" className="py-16 text-center text-sm text-muted-foreground">
+                    Loading&hellip;
+                  </div>
+                }
+              >
+                <OrgChart />
+              </Suspense>
             </AppShell>
           </ProtectedRoute>
         }
