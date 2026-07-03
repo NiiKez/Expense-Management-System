@@ -1,8 +1,11 @@
 import axios from 'axios';
 
 // Field names whose values must never reach logs (matched case-insensitively).
-// Covers OBO token responses, bearer headers, OAuth flows, and generic secrets.
-const SENSITIVE_FIELD_PATTERN = /(access_token|refresh_token|id_token|assertion|client_secret|authorization|password|secret|api[_-]?key|cookie|set-cookie)/i;
+// Covers OBO token responses, bearer headers, OAuth flows, generic secrets, and
+// DB connection credentials. Additions are deliberately collision-free: e.g. bare
+// `token` is NOT listed (it would redact a benign `tokenizer`), and `email` /
+// `displayName` stay visible by design — they are operational context, not secrets.
+const SENSITIVE_FIELD_PATTERN = /(access_token|refresh_token|id_token|assertion|client_secret|authorization|password|passwd|pwd|passphrase|secret|api[_-]?key|private[_-]?key|credentials?|cookie|set-cookie|connection[_-]?string|database_url)/i;
 const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 4;
 
@@ -19,10 +22,16 @@ const SENSITIVE_QUERY_PARAMS =
 const BEARER_TOKEN = /\bBearer\s+\S+/gi;
 // A JWT: three base64url segments separated by dots.
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+// Credentials embedded in a connection-string/URL userinfo, e.g.
+// `mysql://user:pass@host` — the `@` anchor keeps a bare `host:port` (no
+// userinfo) untouched. Character classes are flat to avoid pathological
+// backtracking; the scheme is preserved so the log still shows what failed.
+const URI_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]*:[^\s/:@]+@/gi;
 
 function scrubStringValue(value: string): string {
   return value
     .replace(SENSITIVE_QUERY_PARAMS, (_match, key: string) => `${key}=${REDACTED}`)
+    .replace(URI_CREDENTIALS, (_match, scheme: string) => `${scheme}${REDACTED}@`)
     .replace(BEARER_TOKEN, `Bearer ${REDACTED}`)
     .replace(JWT_PATTERN, REDACTED);
 }

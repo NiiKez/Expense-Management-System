@@ -1,5 +1,6 @@
 import mysql from 'mysql2/promise';
 import logger from './logger';
+import { summarizeHttpError } from '../utils/logSanitizer';
 
 // Refuse a missing OR blank DB_PASSWORD outside the test environment.
 // Why: defaulting to '' masked misconfigurations where the app silently used an
@@ -47,7 +48,10 @@ if (process.env.NODE_ENV !== 'test') {
       conn.release();
     })
     .catch((err) => {
-      logger.error('MySQL pool connection failed', { err });
+      // summarizeHttpError extracts name/message/stack; a raw Error would
+      // serialize to {} once redactFormat deep-clones the log meta, losing the
+      // one thing this line exists to report — the connection failure reason.
+      logger.error('MySQL pool connection failed', { err: summarizeHttpError(err) });
     });
 }
 

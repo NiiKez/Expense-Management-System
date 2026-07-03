@@ -1,7 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { authorize, denyDemo, demoScope } from '../../middleware/rbac';
-import { Role } from '../../types';
+import { Role, SecurityEventType } from '../../types';
 import { AppError } from '../../utils/errors';
+import { securityEventModel } from '../../models/securityEvent';
+
+// Recording is verified in securityEvent.test.ts; mock it here so authorize/denyDemo
+// never touch the real DB and so we can assert that a denial IS recorded (and an
+// allow is NOT).
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
+
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 
 // Helper to create a mock request with optional user. Callers pass the user
 // without `assignedRoles` (RBAC only inspects the active `role`); we default it
@@ -19,6 +29,7 @@ describe('authorize middleware', () => {
 
   beforeEach(() => {
     next = jest.fn();
+    mockedSecurityEvent.record.mockClear();
   });
 
   // ── No user (unauthenticated) ──────────────────────────────
@@ -51,6 +62,8 @@ describe('authorize middleware', () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith();
+    // An allowed request is not a security event.
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
   });
 
   // ── Authorized: multiple allowed roles ─────────────────────
@@ -88,6 +101,13 @@ describe('authorize middleware', () => {
     expect(error).toBeInstanceOf(AppError);
     expect(error.statusCode).toBe(403);
     expect(error.message).toBe('Insufficient permissions');
+    // The denial is recorded as an ACCESS_DENIED security event.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: SecurityEventType.ACCESS_DENIED,
+        role: Role.EMPLOYEE,
+      }),
+    );
   });
 
   // ── Each role can be individually authorized ───────────────
@@ -156,6 +176,7 @@ describe('denyDemo middleware', () => {
 
   beforeEach(() => {
     next = jest.fn();
+    mockedSecurityEvent.record.mockClear();
   });
 
   it('blocks a demo session with 403 (e.g. on a CSV export route)', () => {
@@ -169,6 +190,9 @@ describe('denyDemo middleware', () => {
     expect(error).toBeInstanceOf(AppError);
     expect(error.statusCode).toBe(403);
     expect(error.message).toBe('This action is not available in demo mode');
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: SecurityEventType.ACCESS_DENIED }),
+    );
   });
 
   it('passes a real (non-demo) admin through', () => {
@@ -179,6 +203,7 @@ describe('denyDemo middleware', () => {
     denyDemo(req as Request, mockResponse() as Response, next);
 
     expect(next).toHaveBeenCalledWith();
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
   });
 });
 

@@ -91,6 +91,7 @@ import { authenticate } from '../../middleware/auth';
 import { entraConfig } from '../../config/entra';
 import { userModel } from '../../models/user';
 import { securityEventModel } from '../../models/securityEvent';
+import { __resetLoginDedupe } from '../../middleware/loginEvents';
 
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
 const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
@@ -196,6 +197,9 @@ describe('authenticate — real Entra ID JWT path', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // The login-event dedupe is module-level state; reset it so each test's fresh
+    // token is treated as a distinct sign-in.
+    __resetLoginDedupe();
     mockedUserModel.upsertByEntraId.mockResolvedValue(dbUser());
     mockedUserModel.updateRole.mockImplementation(async (id, role) => dbUser({ id, role }));
   });
@@ -386,6 +390,13 @@ describe('authenticate — real Entra ID JWT path', () => {
       expect(err?.statusCode).toBe(403);
       expect(req.user).toBeUndefined();
       expect(mockedUserModel.upsertByEntraId).not.toHaveBeenCalled();
+      // A valid identity with no recognised role is recorded as an access denial.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.ACCESS_DENIED,
+          outcome: SecurityOutcome.FAILURE,
+        }),
+      );
     });
   });
 
@@ -499,9 +510,12 @@ describe('authenticate — real Entra ID JWT path', () => {
       expect(mockedUserModel.upsertByEntraId).toHaveBeenCalledWith(
         expect.objectContaining({ role: Role.ADMIN }),
       );
-      // …no spurious sync, and no ROLE_CHANGED despite active !== stored.
+      // …no spurious sync, and no ROLE_CHANGED despite active !== stored (the
+      // sign-in itself is still recorded as LOGIN_SUCCESS).
       expect(mockedUserModel.updateRole).not.toHaveBeenCalled();
-      expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
+      expect(mockedSecurityEvent.record).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: SecurityEventType.ROLE_CHANGED }),
+      );
       // …while the request still acts as the switched-down role.
       expect(req.user?.role).toBe(Role.EMPLOYEE);
       expect(req.user?.assignedRoles).toEqual([Role.ADMIN, Role.EMPLOYEE]);
@@ -516,6 +530,13 @@ describe('authenticate — real Entra ID JWT path', () => {
 
       expect(err?.statusCode).toBe(401);
       expect(err?.message).toMatch(/deactivated/i);
+      // The rejection is captured in the durable security trail, carrying the oid.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.ACCOUNT_DEACTIVATED,
+          outcome: SecurityOutcome.FAILURE,
+        }),
+      );
     });
 
     it('rejects a request with no Authorization header', async () => {
@@ -575,10 +596,23 @@ describe('authenticate — real Entra ID JWT path', () => {
       );
     });
 
-    it('does NOT record any security event on the per-request success path', async () => {
-      // Stored EMPLOYEE, token EMPLOYEE → no role change, no failure: no DB row.
-      await run(makeReq(signToken()));
+    it('records LOGIN_SUCCESS once per token, then stays quiet for the same token', async () => {
+      // Stored EMPLOYEE, token EMPLOYEE → no role change: the only event is the
+      // sign-in itself, recorded exactly once for this token.
+      const token = signToken();
+      await run(makeReq(token));
 
+      expect(mockedSecurityEvent.record).toHaveBeenCalledTimes(1);
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.LOGIN_SUCCESS,
+          outcome: SecurityOutcome.SUCCESS,
+        }),
+      );
+
+      // The SAME token on a subsequent request is deduped — no per-request spam.
+      mockedSecurityEvent.record.mockClear();
+      await run(makeReq(token));
       expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
     });
   });

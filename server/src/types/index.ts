@@ -47,11 +47,15 @@ export enum NotificationType {
 // off, so the string values must stay stable once shipped.
 export enum SecurityEventType {
   AUTH_FAILURE = 'AUTH_FAILURE',               // JWT verification failed
-  ACCESS_DENIED = 'ACCESS_DENIED',             // OWNER_OIDS allowlist rejection
+  LOGIN_SUCCESS = 'LOGIN_SUCCESS',             // Entra sign-in accepted (once per freshly-issued token)
+  ACCESS_DENIED = 'ACCESS_DENIED',             // authorization denied (owner allowlist, missing app role, OR RBAC role check)
+  ACCOUNT_DEACTIVATED = 'ACCOUNT_DEACTIVATED', // valid credential for a disabled account
   ROLE_CHANGED = 'ROLE_CHANGED',               // synced DB role actually changed
   STUB_AUTH_USED = 'STUB_AUTH_USED',           // dev-only stub identity issued
   DEMO_SESSION_ISSUED = 'DEMO_SESSION_ISSUED', // public demo workspace provisioned
   AUDIT_LOG_EXPORTED = 'AUDIT_LOG_EXPORTED',   // admin exported the audit-log CSV
+  RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED', // per-IP rate limit tripped (first breach per window)
+  CORS_REJECTED = 'CORS_REJECTED',             // disallowed cross-origin request (log-only; not persisted)
 }
 
 export enum SecurityOutcome {

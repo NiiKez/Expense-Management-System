@@ -254,9 +254,13 @@ describe('authenticate stub auth', () => {
       expect(err.statusCode).toBe(401);
       expect(err.message).toBe('User account is deactivated');
       expect(req.user).toBeUndefined();
-      // A deactivated stub identity must NOT be recorded as a successful stub use.
+      // A deactivated stub identity must NOT be recorded as a successful stub use…
       expect(mockedSecurityEvent.record).not.toHaveBeenCalledWith(
         expect.objectContaining({ event_type: SecurityEventType.STUB_AUTH_USED }),
+      );
+      // …but the rejection IS captured as a deactivated-account event.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: SecurityEventType.ACCOUNT_DEACTIVATED }),
       );
     });
   });

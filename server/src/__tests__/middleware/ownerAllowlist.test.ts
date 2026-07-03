@@ -71,9 +71,16 @@ describe('authenticate owner allowlist (OWNER_OIDS)', () => {
 
     expect(next).toHaveBeenCalledWith();
     expect(req.user).toMatchObject({ id: 1, role: Role.ADMIN });
-    // Happy path: the stored role already matches the token, so no security
-    // event is recorded — proves we never write a row on the success path.
-    expect(mockedSecurityEvent.record).not.toHaveBeenCalled();
+    // Happy path for an allowlisted owner: no denial and (stored role matches the
+    // token) no ROLE_CHANGED. The successful sign-in itself is LOGIN_SUCCESS —
+    // covered in the JWT-path tests; the mocked verify here omits `iat`, so that
+    // dedupe-gated event does not fire.
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: SecurityEventType.ACCESS_DENIED }),
+    );
+    expect(mockedSecurityEvent.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: SecurityEventType.ROLE_CHANGED }),
+    );
   });
 
   it('matches OWNER_OIDS case-insensitively (GUID casing must not lock the owner out)', async () => {
