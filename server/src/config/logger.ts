@@ -1,6 +1,8 @@
 import winston from 'winston';
+import type Transport from 'winston-transport';
 import crypto from 'crypto';
 import { redactLogValue } from '../utils/logSanitizer';
+import { getPulsarLogsTransport } from './pulsarLogsTransport';
 
 export const generateCorrelationId = (): string =>
   crypto.randomUUID();
@@ -26,6 +28,26 @@ const redactFormat = winston.format((info) => {
   return info;
 });
 
+const transports: Transport[] = [
+  new winston.transports.Console({
+    format:
+      process.env.NODE_ENV !== 'production'
+        ? winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+          )
+        : winston.format.json(),
+  }),
+];
+
+// Ship warn+error lines (info opt-in) to the Pulsar dashboard when configured.
+// Off unless PULSAR_LOGS_URL + LOGS_INGEST_KEY are set. It inherits the already
+// redacted/stamped `info` like any transport, so no extra format is needed.
+const pulsarTransport = getPulsarLogsTransport();
+if (pulsarTransport) {
+  transports.push(pulsarTransport);
+}
+
 const logger = winston.createLogger({
   level: resolveLogLevel(),
   // Stamp every line with stable deploy identity. Multiple apps/replicas write to
@@ -50,17 +72,7 @@ const logger = winston.createLogger({
     winston.format.errors({ stack: true }),
     winston.format.json()
   ),
-  transports: [
-    new winston.transports.Console({
-      format:
-        process.env.NODE_ENV !== 'production'
-          ? winston.format.combine(
-              winston.format.colorize(),
-              winston.format.simple()
-            )
-          : winston.format.json(),
-    }),
-  ],
+  transports,
 });
 
 export default logger;
