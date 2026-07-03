@@ -8,6 +8,7 @@ import { register } from './src/services/metricsService';
 import { intFromEnv } from './src/utils/env';
 import { isDemoEnabled } from './src/config/demo';
 import { startDemoCleanup } from './src/services/demoService';
+import { flushPulsarLogs } from './src/config/pulsarLogsTransport';
 
 const REQUIRED_PRODUCTION_ENV = [
   'CORS_ORIGIN',
@@ -165,6 +166,8 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
       closeServer(httpServer, 'HTTP'),
       closeServer(metricsServer, 'metrics'),
     ]);
+    // Deliver any buffered log lines before we exit (best-effort, self-bounded).
+    await flushPulsarLogs();
     await pool.end();
     logger.info('Shutdown complete');
     clearTimeout(forceTimer);
