@@ -1,6 +1,24 @@
 import { Request, Response, NextFunction } from 'express';
-import { Role } from '../types';
+import { Role, SecurityEventType, SecurityOutcome } from '../types';
 import { forbidden, unauthorized } from '../utils/errors';
+import { securityEventModel } from '../models/securityEvent';
+
+// Record an authorization denial to the durable security trail. Fire-and-forget:
+// record() is best-effort and never throws, so it stays off the request path and
+// out of the (synchronous) middleware signature. Bounded by the per-route rate
+// limiter, so a probing caller cannot flood the table.
+function recordAccessDenied(req: Request, detail: string): void {
+  void securityEventModel.record({
+    event_type: SecurityEventType.ACCESS_DENIED,
+    outcome: SecurityOutcome.FAILURE,
+    user_id: req.user?.id ?? null,
+    role: req.user?.role ?? null,
+    ip_address: req.ip ?? null,
+    request_id: req.id ?? null,
+    detail,
+    metadata: { method: req.method, path: req.originalUrl },
+  });
+}
 
 export const authorize = (allowedRoles: Role[]) => {
   return (req: Request, _res: Response, next: NextFunction): void => {
@@ -10,6 +28,7 @@ export const authorize = (allowedRoles: Role[]) => {
     }
 
     if (!allowedRoles.includes(req.user.role)) {
+      recordAccessDenied(req, `Role ${req.user.role} not permitted (requires ${allowedRoles.join('/') || 'none'})`);
       next(forbidden());
       return;
     }
@@ -23,6 +42,7 @@ export const authorize = (allowedRoles: Role[]) => {
 // explicit and stays correct if such a route's role requirement ever changes.
 export const denyDemo = (req: Request, _res: Response, next: NextFunction): void => {
   if (req.user?.demoMode) {
+    recordAccessDenied(req, 'Demo session blocked from a privileged action');
     next(forbidden('This action is not available in demo mode'));
     return;
   }

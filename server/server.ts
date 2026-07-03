@@ -24,13 +24,20 @@ const REQUIRED_ENTRA_ENV = [
   'ENTRA_TENANT_ID',
 ];
 
+// Fatal boot-config failure. Emit through Winston (not console.error) so the line
+// is structured JSON — stamped service/env/version and matchable by alert rules on
+// `event: 'CONFIG_INVALID'` in the platform log pipeline — then exit non-zero so the
+// orchestrator surfaces a crash-loop instead of a silently-degraded instance.
+function fatalConfig(message: string, meta: Record<string, unknown> = {}): never {
+  logger.error(`FATAL: ${message}`, { event: 'CONFIG_INVALID', ...meta });
+  process.exit(1);
+}
+
 const stubAuthEnabled = process.env.ALLOW_STUB_AUTH === 'true';
 
 // Fail-fast: the stub-auth bypass must never be reachable outside development.
 if (stubAuthEnabled && process.env.NODE_ENV !== 'development') {
-  // eslint-disable-next-line no-console
-  console.error('FATAL: ALLOW_STUB_AUTH=true is only permitted when NODE_ENV=development');
-  process.exit(1);
+  fatalConfig('ALLOW_STUB_AUTH=true is only permitted when NODE_ENV=development');
 }
 
 // Fail-fast: enabling the public demo without a signing secret would mint
@@ -41,16 +48,10 @@ const MIN_DEMO_SECRET_LENGTH = 32;
 if (process.env.ENABLE_DEMO === 'true') {
   const demoSecret = process.env.DEMO_JWT_SECRET || '';
   if (!demoSecret) {
-    // eslint-disable-next-line no-console
-    console.error('FATAL: ENABLE_DEMO=true requires DEMO_JWT_SECRET to be set');
-    process.exit(1);
+    fatalConfig('ENABLE_DEMO=true requires DEMO_JWT_SECRET to be set');
   }
   if (demoSecret.length < MIN_DEMO_SECRET_LENGTH) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `FATAL: DEMO_JWT_SECRET must be at least ${MIN_DEMO_SECRET_LENGTH} characters`,
-    );
-    process.exit(1);
+    fatalConfig(`DEMO_JWT_SECRET must be at least ${MIN_DEMO_SECRET_LENGTH} characters`);
   }
 }
 
@@ -61,18 +62,14 @@ if (process.env.ENABLE_DEMO === 'true') {
 if (!stubAuthEnabled) {
   const missingEntra = REQUIRED_ENTRA_ENV.filter((name) => !process.env[name]);
   if (missingEntra.length > 0) {
-    // eslint-disable-next-line no-console
-    console.error(`FATAL: missing required Entra environment variables: ${missingEntra.join(', ')}`);
-    process.exit(1);
+    fatalConfig(`missing required Entra environment variables: ${missingEntra.join(', ')}`, { missing: missingEntra });
   }
 }
 
 if (process.env.NODE_ENV === 'production') {
   const missingEnv = REQUIRED_PRODUCTION_ENV.filter((name) => !process.env[name]);
   if (missingEnv.length > 0) {
-    // eslint-disable-next-line no-console
-    console.error(`FATAL: missing required production environment variables: ${missingEnv.join(', ')}`);
-    process.exit(1);
+    fatalConfig(`missing required production environment variables: ${missingEnv.join(', ')}`, { missing: missingEnv });
   }
 }
 
@@ -83,9 +80,7 @@ if (process.env.NODE_ENV === 'production') {
 // this extends the guarantee to staging and any other non-dev deploy.)
 if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
   if (!process.env.CORS_ORIGIN || process.env.CORS_ORIGIN.trim() === '') {
-    // eslint-disable-next-line no-console
-    console.error('FATAL: CORS_ORIGIN is required when NODE_ENV is not "development"');
-    process.exit(1);
+    fatalConfig('CORS_ORIGIN is required when NODE_ENV is not "development"');
   }
 }
 

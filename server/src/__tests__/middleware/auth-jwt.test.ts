@@ -516,6 +516,13 @@ describe('authenticate — real Entra ID JWT path', () => {
 
       expect(err?.statusCode).toBe(401);
       expect(err?.message).toMatch(/deactivated/i);
+      // The rejection is captured in the durable security trail, carrying the oid.
+      expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: SecurityEventType.ACCOUNT_DEACTIVATED,
+          outcome: SecurityOutcome.FAILURE,
+        }),
+      );
     });
 
     it('rejects a request with no Authorization header', async () => {

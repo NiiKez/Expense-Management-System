@@ -67,9 +67,13 @@ const logger = winston.createLogger({
       'unknown',
   },
   format: winston.format.combine(
-    redactFormat(),
+    // errors() runs BEFORE redactFormat so a top-level Error's non-enumerable
+    // `message`/`stack` are rehydrated into enumerable fields first — otherwise
+    // redactFormat's deep-clone (Object.entries) drops them and the line logs an
+    // empty {}. redactFormat then scrubs the now-visible stack string like any value.
     winston.format.timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
     winston.format.errors({ stack: true }),
+    redactFormat(),
     winston.format.json()
   ),
   transports,

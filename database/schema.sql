@@ -300,7 +300,7 @@ DELIMITER ;
 -- ============================================================
 CREATE TABLE security_events (
     id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    event_type      VARCHAR(64)     NOT NULL,                   -- AUTH_FAILURE, ACCESS_DENIED, ROLE_CHANGED, STUB_AUTH_USED, DEMO_SESSION_ISSUED, AUDIT_LOG_EXPORTED
+    event_type      VARCHAR(64)     NOT NULL,                   -- AUTH_FAILURE, ACCESS_DENIED, ACCOUNT_DEACTIVATED, ROLE_CHANGED, STUB_AUTH_USED, DEMO_SESSION_ISSUED, AUDIT_LOG_EXPORTED, RATE_LIMIT_EXCEEDED (CORS_REJECTED is log-only, never persisted)
     outcome         ENUM('SUCCESS', 'FAILURE')
                                     NOT NULL,
     user_id         INT UNSIGNED    NULL,                       -- FK -> users.id; NULL when no resolved user (e.g. failed login)

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../config/db';
+import logger from '../config/logger';
 
 const router = Router();
 
@@ -16,12 +17,19 @@ function liveness(_req: Request, res: Response): void {
 // then rejoins when it recovers. Point readiness probes and the Docker
 // HEALTHCHECK here. Intentionally omits uptime/timestamp — those are recon
 // signals on a public, unauthenticated route and aren't needed by a probe.
-async function readiness(_req: Request, res: Response): Promise<void> {
+async function readiness(req: Request, res: Response): Promise<void> {
   try {
     const conn = await pool.getConnection();
     conn.release();
     res.json({ success: true, data: { status: 'healthy' } });
-  } catch {
+  } catch (err) {
+    // The 503 itself is captured by the access log, but the CAUSE (connection
+    // refused / auth / TLS) is the actionable part during a DB outage — log it
+    // (message only; no stack/secret) so operators aren't left guessing.
+    logger.warn('Readiness check failed', {
+      err: err instanceof Error ? err.message : String(err),
+      requestId: req.id,
+    });
     res.status(503).json({ success: false, data: { status: 'unhealthy' } });
   }
 }

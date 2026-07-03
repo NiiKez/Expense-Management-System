@@ -8,7 +8,9 @@ import expressWinston from 'express-winston';
 import logger, { generateCorrelationId } from './config/logger';
 import { errorHandler } from './middleware/errorHandler';
 import { metricsMiddleware } from './middleware/metrics';
+import { rateLimitHandler } from './middleware/rateLimitLogging';
 import { forbidden, notFound } from './utils/errors';
+import { SecurityEventType } from './types';
 import expenseRoutes from './routes/expenses';
 import approvalRoutes from './routes/approvals';
 import adminRoutes from './routes/admin';
@@ -22,6 +24,22 @@ import authRoutes from './routes/auth';
 const app = express();
 
 app.disable('x-powered-by');
+
+// Request correlation — the FIRST middleware so EVERY request carries an id, even
+// one an early guard (CORS, helmet) short-circuits before it reaches routes. Honor
+// an upstream X-Request-Id when present and well-formed, otherwise mint one; echo
+// it back so a client can quote the id of a failing request. Access logs and error
+// lines both read req.id, so it must be set before either can run.
+app.use((req, res, next) => {
+  const incoming = req.header('x-request-id');
+  // Only trust a syntactically safe id: an over-long or control-char value would
+  // otherwise flow into res.setHeader (throwing ERR_INVALID_CHAR → 500) and taint
+  // the logs. Anything else is replaced with a freshly minted id.
+  const id = incoming && /^[\w.-]{1,200}$/.test(incoming) ? incoming : generateCorrelationId();
+  req.id = id;
+  res.setHeader('x-request-id', id);
+  next();
+});
 
 // Security headers. In the combined single-image deploy this app also serves the
 // built SPA (index.html), so the CSP governs the page itself — not just JSON
@@ -77,24 +95,17 @@ app.use(cors({
       return;
     }
 
-    // Reject explicitly so the request short-circuits with a clear error,
-    // and log so misconfigurations surface in monitoring.
-    logger.warn('Rejected CORS origin', { origin });
+    // Reject explicitly so the request short-circuits with a clear error, and log
+    // with a stable `event` code so alert rules catch it. Log-only (not persisted
+    // to security_events): the cors origin callback has no req context, and a bad-
+    // origin flood short-circuits BEFORE the rate limiter, so a durable write here
+    // would be an unbounded amplification vector. The Winston line (buffered/dropped
+    // by the Pulsar transport under load) is the safe sink.
+    logger.warn('Rejected CORS origin', { event: SecurityEventType.CORS_REJECTED, origin });
     callback(forbidden('Origin not allowed'));
   },
   credentials: allowedOrigins.length > 0,
 }));
-
-// Request correlation. Honor an upstream X-Request-Id (gateway/load balancer)
-// when present and sane, otherwise mint one; echo it back so a client can quote
-// the id of a failing request. Runs before request logging so access logs carry it.
-app.use((req, res, next) => {
-  const incoming = req.header('x-request-id');
-  const id = incoming && incoming.length <= 200 ? incoming : generateCorrelationId();
-  req.id = id;
-  res.setHeader('x-request-id', id);
-  next();
-});
 
 // Static assets the SPA serves in bulk — a single page load fans out to dozens of
 // these. Matching on file extension lets the skip() below drop only the successful
@@ -149,6 +160,7 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: true, xForwardedForHeader: true },
+  handler: rateLimitHandler,
 });
 
 // Rate limiting for sensitive routes
@@ -158,6 +170,7 @@ const strictLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: true, xForwardedForHeader: true },
+  handler: rateLimitHandler,
 });
 
 const healthLimiter = rateLimit({
@@ -166,6 +179,7 @@ const healthLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: true, xForwardedForHeader: true },
+  handler: rateLimitHandler,
   // Never rate-limit liveness: a 429 to /live reads as a liveness failure and
   // makes the orchestrator kill an otherwise-healthy instance — the crash-loop
   // amplification the liveness/readiness split exists to prevent. The endpoint
@@ -182,6 +196,7 @@ const demoLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { trustProxy: true, xForwardedForHeader: true },
+  handler: rateLimitHandler,
 });
 
 // Prometheus metrics are served on a separate internal listener — see server.ts.

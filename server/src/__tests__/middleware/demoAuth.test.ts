@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { authenticate } from '../../middleware/auth';
-import { Role, User } from '../../types';
+import { Role, SecurityEventType, User } from '../../types';
 import { userModel } from '../../models/user';
+import { securityEventModel } from '../../models/securityEvent';
 
 jest.mock('../../models/user', () => ({
   userModel: {
@@ -10,7 +11,14 @@ jest.mock('../../models/user', () => ({
   },
 }));
 
+// Recording is verified in securityEvent.test.ts; mock it here so the middleware
+// never reaches the real DB and so we can assert the deactivated-account event.
+jest.mock('../../models/securityEvent', () => ({
+  securityEventModel: { record: jest.fn() },
+}));
+
 const mockedUserModel = userModel as jest.Mocked<typeof userModel>;
+const mockedSecurityEvent = securityEventModel as jest.Mocked<typeof securityEventModel>;
 const DEMO_SECRET = 'test-demo-secret-please-ignore';
 
 function demoUser(overrides: Partial<User> = {}): User {
@@ -140,6 +148,10 @@ describe('authenticate demo auth', () => {
     expect(err.statusCode).toBe(401);
     expect(err.message).toBe('User account is deactivated');
     expect(req.user).toBeUndefined();
+    // The rejection is captured in the durable security trail.
+    expect(mockedSecurityEvent.record).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: SecurityEventType.ACCOUNT_DEACTIVATED }),
+    );
   });
 
   it.each(['abc', '0', '-4', '1.5'])(

@@ -61,6 +61,44 @@ describe('redactLogValue', () => {
     },
   );
 
+  // Credential/connection field names added to close the DB-secret and bare-
+  // credential gaps. Deliberately collision-free with the benign fields above
+  // (e.g. `pwd` does not appear in any of them, and bare `token` is intentionally
+  // NOT redacted so `tokenizer` survives).
+  it.each([
+    'passwd',
+    'pwd',
+    'passphrase',
+    'private_key',
+    'private-key',
+    'credential',
+    'credentials',
+    'connection_string',
+    'connectionString',
+    'database_url',
+  ])('redacts the credential/connection field "%s"', (field) => {
+    const redacted = redactLogValue({ [field]: 'super-secret-value' }) as Record<string, unknown>;
+    expect(redacted[field]).toBe('[REDACTED]');
+  });
+
+  it('scrubs the user:password userinfo from a connection-string value, keeping the scheme/host', () => {
+    const redacted = redactLogValue({
+      dsn: 'mysql://appuser:s3cr3tPw@db.internal:3306/appdb',
+    }) as Record<string, unknown>;
+
+    const dsn = redacted.dsn as string;
+    expect(dsn).not.toContain('s3cr3tPw');
+    expect(dsn).not.toContain('appuser');
+    expect(dsn).toContain('mysql://[REDACTED]@db.internal:3306/appdb');
+  });
+
+  it('leaves a bare host:port URL (no userinfo) untouched', () => {
+    // The `@` anchor means a plain host:port must NOT be mistaken for credentials.
+    expect(redactLogValue('connecting to http://db.internal:3306/appdb')).toBe(
+      'connecting to http://db.internal:3306/appdb',
+    );
+  });
+
   it('redacts secrets inside arrays of objects', () => {
     const redacted = redactLogValue({
       headers: [

@@ -172,6 +172,15 @@ async function handleStubAuth(req: Request, next: NextFunction): Promise<boolean
   }
 
   if (!user.is_active) {
+    await securityEventModel.record({
+      event_type: SecurityEventType.ACCOUNT_DEACTIVATED,
+      outcome: SecurityOutcome.FAILURE,
+      user_id: user.id,
+      role: user.role,
+      ip_address: req.ip ?? null,
+      request_id: req.id ?? null,
+      detail: 'Stub auth rejected: account is deactivated',
+    });
     next(unauthorized('User account is deactivated'));
     return true;
   }
@@ -255,6 +264,15 @@ async function handleDemoAuth(req: Request, next: NextFunction): Promise<boolean
     return true;
   }
   if (!user.is_active) {
+    await securityEventModel.record({
+      event_type: SecurityEventType.ACCOUNT_DEACTIVATED,
+      outcome: SecurityOutcome.FAILURE,
+      user_id: user.id,
+      role: user.role,
+      ip_address: req.ip ?? null,
+      request_id: req.id ?? null,
+      detail: 'Demo auth rejected: account is deactivated',
+    });
     next(unauthorized('User account is deactivated'));
     return true;
   }
@@ -370,6 +388,16 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
     }
 
     if (!user.is_active) {
+      await securityEventModel.record({
+        event_type: SecurityEventType.ACCOUNT_DEACTIVATED,
+        outcome: SecurityOutcome.FAILURE,
+        user_id: user.id,
+        entra_oid: decoded.oid,
+        role: canonicalRole,
+        ip_address: req.ip ?? null,
+        request_id: req.id ?? null,
+        detail: 'Entra auth rejected: account is deactivated',
+      });
       next(unauthorized('User account is deactivated'));
       return;
     }
