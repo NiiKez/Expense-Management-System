@@ -7,6 +7,7 @@ import { forbidden, unauthorized } from '../utils/errors';
 import logger from '../config/logger';
 import { userModel } from '../models/user';
 import { securityEventModel } from '../models/securityEvent';
+import { recordLoginSuccess } from './loginEvents';
 import { getDemoSecret, isDemoEnabled } from '../config/demo';
 
 // JWKS client — caches signing keys from Entra ID.
@@ -322,6 +323,17 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
     const decoded = await verifyToken(token);
     const assignedRoles = resolveRoles(decoded.roles);
     if (assignedRoles.length === 0) {
+      // A valid tenant identity with no recognised app role is an authorization
+      // failure worth a durable record — otherwise "someone in the tenant tried to
+      // sign in but isn't granted access" leaves no trail.
+      await securityEventModel.record({
+        event_type: SecurityEventType.ACCESS_DENIED,
+        outcome: SecurityOutcome.FAILURE,
+        entra_oid: decoded.oid,
+        ip_address: req.ip ?? null,
+        request_id: req.id ?? null,
+        detail: 'No assigned application role',
+      });
       next(forbidden('An assigned application role is required'));
       return;
     }
@@ -414,6 +426,10 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       email: user.email,
       display_name: user.display_name,
     };
+
+    // Record the sign-in — deduped to once per freshly-issued token, so this fires
+    // on login/refresh, not on every authenticated request.
+    recordLoginSuccess(req, { oid: decoded.oid, iat: decoded.iat, userId: user.id, role: canonicalRole });
 
     next();
   } catch (err) {

@@ -47,7 +47,8 @@ export enum NotificationType {
 // off, so the string values must stay stable once shipped.
 export enum SecurityEventType {
   AUTH_FAILURE = 'AUTH_FAILURE',               // JWT verification failed
-  ACCESS_DENIED = 'ACCESS_DENIED',             // authorization denied (owner allowlist OR RBAC role check)
+  LOGIN_SUCCESS = 'LOGIN_SUCCESS',             // Entra sign-in accepted (once per freshly-issued token)
+  ACCESS_DENIED = 'ACCESS_DENIED',             // authorization denied (owner allowlist, missing app role, OR RBAC role check)
   ACCOUNT_DEACTIVATED = 'ACCOUNT_DEACTIVATED', // valid credential for a disabled account
   ROLE_CHANGED = 'ROLE_CHANGED',               // synced DB role actually changed
   STUB_AUTH_USED = 'STUB_AUTH_USED',           // dev-only stub identity issued
