@@ -1,6 +1,6 @@
 # Expense Management
 
-**Live demo → [expenses.prodstack.live](https://expenses.prodstack.live)** — the demo runs on scale-to-zero infrastructure, so the first request after it has been idle can take a few seconds to wake the app. That brief cold start is expected, not a fault — just give it a moment.
+**Live demo → [expenses.prodstack.live](https://expenses.prodstack.live)** (currently offline) — the demo runs on scale-to-zero infrastructure, so the first request after it has been idle can take a few seconds to wake the app. That brief cold start is expected, not a fault — just give it a moment.
 
 A full-stack expense management system: employees submit expenses, managers approve or reject them, and admins have organisation-wide oversight. Authentication is delegated to Microsoft Entra ID; the manager hierarchy is sourced from Microsoft Graph.
 
