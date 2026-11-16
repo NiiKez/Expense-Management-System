@@ -11,6 +11,20 @@ A full-stack expense management system: employees submit expenses, managers appr
 - **Tests** — Jest (server unit + integration against a real MySQL container), a lighter Jest + React Testing Library suite on the client, and Playwright e2e against a stub-auth dev server.
 - **CI/CD** — GitHub Actions: lint → unit → build → (integration ‖ e2e), with client lint/test/build in parallel, then docker build → push to GHCR on `main`. A separate security workflow adds CodeQL, Trivy, gitleaks, SBOM, and OpenSSF Scorecard scanning.
 
+## Screenshots
+
+**Sign in** — public demo personas or Microsoft Entra ID
+
+![Sign-in page](assets/screenshots/01-login.png)
+
+**Admin dashboard** — org-wide spend, approvals, and category breakdown
+
+![Admin dashboard](assets/screenshots/02-dashboard.png)
+
+**Org chart** — reporting hierarchy synced from Microsoft Graph
+
+![Org chart](assets/screenshots/03-org-chart.png)
+
 ## Repository Layout
 
 ```
