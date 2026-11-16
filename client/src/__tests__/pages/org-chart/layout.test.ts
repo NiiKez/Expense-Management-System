@@ -1,4 +1,4 @@
-import { buildOrgGraph } from '@/pages/org-chart/layout'
+import { buildOrgGraph, NODE_HEIGHT } from '@/pages/org-chart/layout'
 import type { OrgTree, OrgTreeNode } from '@/types'
 
 function node(id: number, managerId: number | null, extra: Partial<OrgTreeNode> = {}): OrgTreeNode {
@@ -88,5 +88,52 @@ describe('buildOrgGraph', () => {
     )
     expect(edges).toHaveLength(0)
     expect(nodes[0]!.data.directReportCount).toBe(0)
+  })
+
+  it('keeps every row level (same y for all nodes at one depth)', () => {
+    const { nodes } = buildOrgGraph(
+      tree([node(1, null), node(2, 1, { jobTitle: 'Engineer' }), node(3, 1)]),
+    )
+    const y = Object.fromEntries(nodes.map((n) => [n.id, n.position.y]))
+    expect(y['2']).toBe(y['3'])
+    expect(y['2']! - y['1']!).toBeGreaterThan(NODE_HEIGHT)
+  })
+
+  describe('collapsed subtrees', () => {
+    // 1 → (2 → (4 → 5), 3)
+    const nested = () => tree([node(1, null), node(2, 1), node(3, 1), node(4, 2), node(5, 4)])
+
+    it('drops everyone below a collapsed node, at any depth', () => {
+      const { nodes, edges } = buildOrgGraph(nested(), new Set([2]))
+      expect(nodes.map((n) => n.id).sort()).toEqual(['1', '2', '3'])
+      expect(edges.map((e) => e.id).sort()).toEqual(['e-1-2', 'e-1-3'])
+    })
+
+    it('flags the collapsed node with how many people it hides', () => {
+      const { nodes } = buildOrgGraph(nested(), new Set([2]))
+      const two = nodes.find((n) => n.id === '2')!.data
+      expect(two.isCollapsed).toBe(true)
+      expect(two.hiddenCount).toBe(2)
+      // The direct-report count is unchanged by collapsing.
+      expect(two.directReportCount).toBe(1)
+      const one = nodes.find((n) => n.id === '1')!.data
+      expect(one.isCollapsed).toBe(false)
+      expect(one.hiddenCount).toBe(0)
+    })
+
+    it('ignores a collapsed id that has no reports or is not in the tree', () => {
+      const { nodes } = buildOrgGraph(nested(), new Set([3, 99]))
+      expect(nodes).toHaveLength(5)
+      expect(nodes.every((n) => n.data.isCollapsed === false)).toBe(true)
+    })
+
+    it('survives a reporting cycle under a collapsed node', () => {
+      // 2 and 3 manage each other; 1 is the only real root.
+      const { nodes } = buildOrgGraph(
+        tree([node(1, null), node(2, 3), node(3, 2), node(4, 1)]),
+        new Set([2]),
+      )
+      expect(nodes.map((n) => n.id).sort()).toEqual(['1', '2', '4'])
+    })
   })
 })

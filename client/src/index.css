@@ -65,6 +65,11 @@
   --chart-6: #a855f7;
   --chart-7: #64748b;
 
+  /* Org-chart role accents. Tuned so tinted text passes AA on its own tint. */
+  --role-admin: #534fd6;
+  --role-manager: #0b6fa4;
+  --role-employee: #5b6473;
+
   /* Layered, brand-tinted elevation (the single biggest "premium" upgrade). */
   --shadow-color: 235 25% 18%;
   --shadow-2xs: 0 1px 1px hsl(var(--shadow-color) / 0.04);
@@ -131,6 +136,10 @@
   --chart-6: #c084fc;
   --chart-7: #94a3b8;
 
+  --role-admin: #8884f5;
+  --role-manager: #4cc3f5;
+  --role-employee: #99a2b3;
+
   /* Shadows read weakly on dark surfaces; keep them but lean on borders too. */
   --shadow-color: 235 50% 3%;
   --shadow-2xs: 0 1px 1px hsl(var(--shadow-color) / 0.3);
@@ -187,6 +196,10 @@
   --color-chart-6: var(--chart-6);
   --color-chart-7: var(--chart-7);
 
+  --color-role-admin: var(--role-admin);
+  --color-role-manager: var(--role-manager);
+  --color-role-employee: var(--role-employee);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -239,5 +252,59 @@
       transition: none !important;
       scroll-behavior: auto !important;
     }
+  }
+}
+
+/* ============================================================
+   Org chart canvas (React Flow) — connectors, hover trail and
+   search focus in the app's palette instead of the library's.
+   ============================================================ */
+.org-flow {
+  --org-edge: color-mix(in oklab, var(--muted-foreground) 42%, transparent);
+  --org-dot: color-mix(in oklab, var(--muted-foreground) 20%, transparent);
+}
+
+.org-flow .react-flow {
+  background: transparent;
+}
+
+.org-flow .react-flow__edge-path {
+  stroke: var(--org-edge);
+  stroke-width: 1.5;
+  transition: stroke 200ms var(--ease-out-quart), stroke-width 200ms var(--ease-out-quart);
+}
+
+/* Hovering a person lights up their reporting line to the top. */
+.org-flow .react-flow__edge.org-edge-active .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2;
+}
+
+.org-flow .react-flow__node.org-on-path .org-card {
+  border-color: color-mix(in oklab, var(--primary) 65%, transparent);
+}
+
+/* The card React Flow focuses via keyboard gets the app's focus ring. */
+.org-flow .react-flow__node:focus-visible {
+  outline: none;
+}
+
+.org-flow .react-flow__node:focus-visible .org-card {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* A person just jumped to from search. */
+.org-flow .react-flow__node.org-focused .org-card {
+  border-color: var(--primary);
+  animation: org-focus-pulse 1.2s var(--ease-out-quart) 2;
+}
+
+@keyframes org-focus-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 12px transparent;
   }
 }

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { OrgTree } from '@/types'
 
@@ -11,39 +11,89 @@ beforeAll(() => {
   if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
 })
 
+// The fake canvas instance the React Flow stub hands to `onInit`, so the page's
+// zoom / fit / centring calls are observable.
+const mockFlow = {
+  zoomIn: jest.fn(),
+  zoomOut: jest.fn(),
+  fitView: jest.fn(),
+  setCenter: jest.fn(),
+  setViewport: jest.fn(),
+  getViewport: jest.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+  getNode: jest.fn((id: string) => ({ id, position: { x: 0, y: 0 } })),
+}
+
 // Stub React Flow — its canvas needs ResizeObserver (absent in jsdom). We keep
-// the `reactflow` chrome marker and additionally render one clickable button per
-// node wired to `onNodeClick`, so the node-click → detail-modal flow is testable.
-jest.mock('@xyflow/react', () => ({
-  ReactFlow: ({
+// the `reactflow` chrome marker and render, per node, a clickable button wired
+// to `onNodeClick` / the hover handlers plus a collapse toggle wired to the
+// chart's actions context, so the page's interactions are testable. Edges are
+// listed as markers carrying their class.
+jest.mock('@xyflow/react', () => {
+  const React = jest.requireActual<typeof import('react')>('react')
+  const { OrgChartActionsContext } = jest.requireActual<
+    typeof import('@/pages/org-chart/context')
+  >('@/pages/org-chart/context')
+
+  type StubNode = { id: string; className?: string; data: { node?: { displayName?: string } } }
+  type StubEdge = { id: string; className?: string }
+
+  function ReactFlow({
     children,
     nodes,
+    edges,
+    onInit,
     onNodeClick,
+    onNodeMouseEnter,
+    onNodeMouseLeave,
   }: {
     children?: React.ReactNode
-    nodes?: Array<{ id: string; data: { node?: { displayName?: string } } }>
-    onNodeClick?: (e: unknown, node: { id: string; data: unknown }) => void
-  }) => (
-    <div data-testid="reactflow">
-      {(nodes ?? []).map((n) => (
-        <button
-          key={n.id}
-          type="button"
-          data-testid={`rf-node-${n.id}`}
-          onClick={(e) => onNodeClick?.(e, n)}
-        >
-          {n.data?.node?.displayName}
-        </button>
-      ))}
-      {children}
-    </div>
-  ),
-  Background: () => null,
-  Controls: () => null,
-  MiniMap: () => null,
-  Handle: () => null,
-  Position: { Top: 'top', Bottom: 'bottom' },
-}))
+    nodes?: StubNode[]
+    edges?: StubEdge[]
+    onInit?: (instance: unknown) => void
+    onNodeClick?: (e: unknown, node: StubNode) => void
+    onNodeMouseEnter?: (e: unknown, node: StubNode) => void
+    onNodeMouseLeave?: (e: unknown, node: StubNode) => void
+  }) {
+    const { toggleCollapse } = React.useContext(OrgChartActionsContext)
+    React.useEffect(() => {
+      onInit?.(mockFlow)
+    }, [onInit])
+    return (
+      <div data-testid="reactflow">
+        {(nodes ?? []).map((n) => (
+          <div key={n.id}>
+            <button
+              type="button"
+              data-testid={`rf-node-${n.id}`}
+              className={n.className}
+              onClick={(e) => onNodeClick?.(e, n)}
+              onMouseEnter={(e) => onNodeMouseEnter?.(e, n)}
+              onMouseLeave={(e) => onNodeMouseLeave?.(e, n)}
+            >
+              {n.data?.node?.displayName}
+            </button>
+            <button
+              type="button"
+              data-testid={`rf-toggle-${n.id}`}
+              onClick={() => toggleCollapse(Number(n.id))}
+            />
+          </div>
+        ))}
+        {(edges ?? []).map((e) => (
+          <span key={e.id} data-testid={`rf-edge-${e.id}`} className={e.className} />
+        ))}
+        {children}
+      </div>
+    )
+  }
+
+  return {
+    ReactFlow,
+    Background: () => null,
+    Handle: () => null,
+    Position: { Top: 'top', Bottom: 'bottom' },
+  }
+})
 // Factory mock so the real module graph (services/api → MSAL) never loads.
 // useOrgUser is stubbed too — the (closed) detail dialog is always mounted and
 // calls it, so it must exist even though these tests never open the modal.
@@ -184,5 +234,150 @@ describe('OrgChart page', () => {
     // with the report nested under its manager.
     expect(within(outline).getByText('Root Person — ADMIN, CEO, Exec')).toBeInTheDocument()
     expect(within(outline).getByText('Report Person — EMPLOYEE, Engineer, Eng')).toBeInTheDocument()
+  })
+
+  describe('toolbar and canvas interactions', () => {
+    // 1 → (2 → (4 → 5), 3): two levels of management under the root.
+    const deep = (): OrgTree => ({
+      scope: 'ADMIN',
+      rootIds: [1],
+      truncated: false,
+      syncedAt: '2024-01-01T00:00:00Z',
+      nodes: [
+        { id: 1, displayName: 'Root Person', role: 'ADMIN', jobTitle: 'CEO', department: 'Exec', managerId: null, isActive: true },
+        { id: 2, displayName: 'Mid Manager', role: 'MANAGER', jobTitle: 'Head of Eng', department: 'Eng', managerId: 1, isActive: true },
+        { id: 3, displayName: 'Solo Report', role: 'EMPLOYEE', jobTitle: null, department: 'Exec', managerId: 1, isActive: true },
+        { id: 4, displayName: 'Team Lead', role: 'MANAGER', jobTitle: 'Lead', department: 'Eng', managerId: 2, isActive: true },
+        { id: 5, displayName: 'Deep Report', role: 'EMPLOYEE', jobTitle: 'Engineer', department: 'Eng', managerId: 4, isActive: true },
+      ],
+    })
+
+    function renderDeep() {
+      mockedUseOrgTree.mockReturnValue(hookState({ data: deep() }))
+      const user = userEvent.setup()
+      render(<OrgChart />)
+      return user
+    }
+
+    it('summarizes the organization and lists the role legend', () => {
+      renderDeep()
+      const summary = screen.getByLabelText('Organization summary')
+      expect(summary).toHaveTextContent('5people')
+      expect(summary).toHaveTextContent('3managers')
+      expect(summary).toHaveTextContent('2departments')
+      expect(summary).toHaveTextContent('4levels')
+
+      const legend = screen.getByRole('list', { name: 'Role legend' })
+      expect(within(legend).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+        'Admin',
+        'Manager',
+        'Employee',
+      ])
+    })
+
+    it('singularizes summary figures', () => {
+      mockedUseOrgTree.mockReturnValue(hookState({ data: oneNode() }))
+      render(<OrgChart />)
+      const summary = screen.getByLabelText('Organization summary')
+      expect(summary).toHaveTextContent('1person')
+      expect(summary).toHaveTextContent('1level')
+      // Nothing below the top level to fold, so no bulk toggle.
+      expect(screen.queryByRole('button', { name: /Collapse all|Expand all/ })).not.toBeInTheDocument()
+    })
+
+    it('folds and unfolds one manager from the card toggle, keeping the card in place', async () => {
+      const user = renderDeep()
+      mockFlow.getNode.mockReturnValueOnce({ id: '2', position: { x: 500, y: 500 } })
+
+      await user.click(screen.getByTestId('rf-toggle-2'))
+      expect(screen.queryByTestId('rf-node-4')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('rf-node-5')).not.toBeInTheDocument()
+      expect(screen.getByTestId('rf-node-3')).toBeInTheDocument()
+      // The viewport is shifted by however far the layout moved the toggled card.
+      expect(mockFlow.setViewport).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('button', { name: 'Expand all' })).toBeInTheDocument()
+
+      await user.click(screen.getByTestId('rf-toggle-2'))
+      expect(screen.getByTestId('rf-node-5')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Collapse all' })).toBeInTheDocument()
+    })
+
+    it('collapses everything below the top level, then expands it again, re-fitting each time', async () => {
+      const user = renderDeep()
+
+      await user.click(screen.getByRole('button', { name: 'Collapse all' }))
+      expect(screen.getByTestId('rf-node-1')).toBeInTheDocument()
+      expect(screen.getByTestId('rf-node-2')).toBeInTheDocument()
+      expect(screen.getByTestId('rf-node-3')).toBeInTheDocument()
+      expect(screen.queryByTestId('rf-node-4')).not.toBeInTheDocument()
+      expect(mockFlow.fitView).toHaveBeenCalledTimes(1)
+
+      await user.click(screen.getByRole('button', { name: 'Expand all' }))
+      expect(screen.getByTestId('rf-node-5')).toBeInTheDocument()
+      expect(mockFlow.fitView).toHaveBeenCalledTimes(2)
+    })
+
+    it('reveals, centres and highlights a person picked from search', async () => {
+      const user = renderDeep()
+      await user.click(screen.getByRole('button', { name: 'Collapse all' }))
+      expect(screen.queryByTestId('rf-node-5')).not.toBeInTheDocument()
+
+      await user.type(screen.getByRole('combobox', { name: 'Find a person' }), 'deep')
+      await user.click(screen.getByRole('option', { name: /Deep Report/ }))
+
+      // Their collapsed managers are unfolded so the card exists again.
+      expect(screen.getByTestId('rf-node-5')).toHaveClass('org-focused')
+      expect(mockFlow.setCenter).toHaveBeenCalledTimes(1)
+      expect(mockFlow.setCenter.mock.calls[0]![2]).toMatchObject({ zoom: 1 })
+    })
+
+    it('clears the search highlight after a moment', async () => {
+      jest.useFakeTimers()
+      try {
+        mockedUseOrgTree.mockReturnValue(hookState({ data: deep() }))
+        const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+        render(<OrgChart />)
+
+        await user.type(screen.getByRole('combobox', { name: 'Find a person' }), 'solo')
+        await user.keyboard('{Enter}')
+        expect(screen.getByTestId('rf-node-3')).toHaveClass('org-focused')
+
+        act(() => {
+          jest.advanceTimersByTime(3000)
+        })
+        expect(screen.getByTestId('rf-node-3')).not.toHaveClass('org-focused')
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+
+    it('lights up the reporting line of a hovered person, up to the root', async () => {
+      const user = renderDeep()
+
+      await user.hover(screen.getByTestId('rf-node-4'))
+      for (const id of [4, 2, 1]) expect(screen.getByTestId(`rf-node-${id}`)).toHaveClass('org-on-path')
+      for (const id of [3, 5]) expect(screen.getByTestId(`rf-node-${id}`)).not.toHaveClass('org-on-path')
+      expect(screen.getByTestId('rf-edge-e-1-2')).toHaveClass('org-edge-active')
+      expect(screen.getByTestId('rf-edge-e-2-4')).toHaveClass('org-edge-active')
+      expect(screen.getByTestId('rf-edge-e-1-3')).not.toHaveClass('org-edge-active')
+      expect(screen.getByTestId('rf-edge-e-4-5')).not.toHaveClass('org-edge-active')
+
+      await user.unhover(screen.getByTestId('rf-node-4'))
+      expect(screen.getByTestId('rf-node-4')).not.toHaveClass('org-on-path')
+      expect(screen.getByTestId('rf-edge-e-1-2')).not.toHaveClass('org-edge-active')
+    })
+
+    it('drives zoom and fit from the canvas controls', async () => {
+      const user = renderDeep()
+      const zoom = screen.getByRole('group', { name: 'Chart zoom' })
+
+      await user.click(within(zoom).getByRole('button', { name: 'Zoom in' }))
+      await user.click(within(zoom).getByRole('button', { name: 'Zoom out' }))
+      await user.click(within(zoom).getByRole('button', { name: 'Fit to screen' }))
+
+      expect(mockFlow.zoomIn).toHaveBeenCalledTimes(1)
+      expect(mockFlow.zoomOut).toHaveBeenCalledTimes(1)
+      expect(mockFlow.fitView).toHaveBeenCalledTimes(1)
+    })
   })
 })
